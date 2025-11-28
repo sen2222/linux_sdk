@@ -1,0 +1,1 @@
+cmd_shell/built-in.o :=  rm -f shell/built-in.o; /opt/gcc-linaro-4.9.4-2017.01-x86_64_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-ar rcs shell/built-in.o
