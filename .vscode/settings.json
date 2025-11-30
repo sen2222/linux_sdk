@@ -18,6 +18,7 @@
         "utility": "c",
         "of.h": "c",
         "cdev.h": "c",
-        "gpio.h": "c"
+        "gpio.h": "c",
+        "memory": "c"
     }
 }

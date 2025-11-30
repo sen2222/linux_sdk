@@ -11,3 +11,6 @@ mount -t devpts devpts /dev/pts
 
 echo /sbin/mdev > /proc/sys/kernel/hotplug
 mdev -s
+
+ifconfig eth0 up
+ifconfig eth0 192.168.31.122

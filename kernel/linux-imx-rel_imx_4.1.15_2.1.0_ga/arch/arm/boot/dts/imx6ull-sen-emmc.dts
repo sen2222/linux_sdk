@@ -163,7 +163,7 @@
 	gpio_led { 
 		#address-cells = <1>;
 		#size-cells = <1>;
-		compatible = "sen, gpio-led";
+		compatible = "sen,gpio-led";
 		status = "okay";
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_led>;					// pinctrl子系统会自动设置复用功能
@@ -174,7 +174,7 @@
 	gpio_beep { 
 		#address-cells = <1>;
 		#size-cells = <1>;
-		compatible = "sen, beep-led";
+		compatible = "sen,beep-led";
 		status = "okay";
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_beep>;					// pinctrl子系统会自动设置复用功能
@@ -185,7 +185,7 @@
 	gpio_key { 
 		#address-cells = <1>;
 		#size-cells = <1>;
-		compatible = "sen, gpio-key";
+		compatible = "sen,gpio-key";
 		status = "okay";
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_key>;					// pinctrl子系统会自动设置复用功能
