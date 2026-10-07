@@ -63,20 +63,63 @@ cleanup() {
     return "$status"
 }
 
+# Reuse nonempty firmware files from the current output directory.
+reuse_firmware() {
+    local name=$1
+    if [[ -f "$OUT_DIR/$name" && -s "$OUT_DIR/$name" ]]; then
+        cp -p -- "$OUT_DIR/$name" "$firmware_dir/$name" || exit 1
+        echo "Skipping existing firmware: $name"
+        return 0
+    fi
+    return 1
+}
+
 build_uboot() {
+    if reuse_firmware "$uboot_name"; then
+        return 0
+    fi
     echo "[1/4] Building U-Boot"
     "$sdk_root/uboot/build.sh"
     cp -- "$sdk_root/uboot/u-boot.imx" "$firmware_dir/$uboot_name"
 }
 
 build_kernel() {
-    echo "[2/4] Building the kernel, modules and device tree"
-    "$sdk_root/kernel/build.sh"
-    cp -- "$sdk_root/kernel/arch/arm/boot/zImage" "$firmware_dir/"
-    cp -- "$sdk_root/kernel/arch/arm/boot/dts/imx6ull-sen-emmc.dtb" "$firmware_dir/$dtb_name"
+    local kernel_dir="$sdk_root/kernel"
+    local targets=()
+    if ! reuse_firmware zImage; then
+        targets+=(zImage modules)
+    fi
+    if ! reuse_firmware "$dtb_name"; then
+        targets+=(imx6ull-sen-emmc.dtb)
+    fi
+    if (( ${#targets[@]} == 0 )); then
+        return 0
+    fi
+
+    echo "[2/4] Building missing kernel outputs: ${targets[*]}"
+    if (( ${#targets[@]} == 3 )); then
+        "$kernel_dir/build.sh"
+    else
+        # Build only the missing image or DTB, keeping the existing kernel configuration.
+        if [[ ! -s "$kernel_dir/.config" ]]; then
+            make -C "$kernel_dir" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
+                imx_sen_emmc_defconfig
+        fi
+        make -C "$kernel_dir" -j"$JOBS" ARCH="$ARCH" CROSS_COMPILE="$CROSS_COMPILE" \
+            "${targets[@]}"
+    fi
+    if [[ ! -s "$firmware_dir/zImage" ]]; then
+        cp -- "$kernel_dir/arch/arm/boot/zImage" "$firmware_dir/"
+    fi
+    if [[ ! -s "$firmware_dir/$dtb_name" ]]; then
+        cp -- "$kernel_dir/arch/arm/boot/dts/imx6ull-sen-emmc.dtb" "$firmware_dir/$dtb_name"
+    fi
 }
 
 pack_rootfs() {
+    if reuse_firmware "$rootfs_name"; then
+        return 0
+    fi
     echo "[3/4] Packaging the existing rootfs"
     "$sdk_root/rootfs/packet.sh" \
         "$sdk_root/rootfs/rootfs" "$firmware_dir/$rootfs_name"

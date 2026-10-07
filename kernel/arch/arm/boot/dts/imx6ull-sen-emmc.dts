@@ -700,21 +700,22 @@
 
 		display-timings {
 			native-mode = <&timing0>;
+			/* TFT4384: 4.3-inch 800x480 panel, matching U-Boot. */
 			timing0: timing0 {
-			clock-frequency = <9200000>;
-			hactive = <480>;
-			vactive = <272>;
-			hfront-porch = <8>;
-			hback-porch = <4>;
-			hsync-len = <41>;
-			vback-porch = <2>;
-			vfront-porch = <4>;
-			vsync-len = <10>;
+				clock-frequency = <31000000>;
+				hactive = <800>;
+				vactive = <480>;
+				hfront-porch = <40>;
+				hback-porch = <88>;
+				hsync-len = <48>;
+				vback-porch = <32>;
+				vfront-porch = <13>;
+				vsync-len = <3>;
 
-			hsync-active = <0>;
-			vsync-active = <0>;
-			de-active = <1>;
-			pixelclk-active = <0>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <1>;
+				pixelclk-active = <0>;
 			};
 		};
 	};
