@@ -1,0 +1,67 @@
+#!/bin/sh
+# BusyBox udhcpc lease callback: configure the address, routes and DNS.
+RESOLV_CONF=${RESOLV_CONF:-/etc/resolv.conf}
+
+configure_address() {
+    set -- "$interface" "$ip"
+    [ -n "$subnet" ] && set -- "$@" netmask "$subnet"
+    set -- "$@" broadcast "${broadcast:-+}"
+    ifconfig "$@"
+}
+
+configure_routes() {
+    [ -n "$router" ] || return 0
+    while route del default gw 0.0.0.0 dev "$interface" 2>/dev/null; do
+        :
+    done
+    local gateway metric=0
+    for gateway in $router; do
+        # A /32 subnet requires a direct route to the gateway.
+        if [ "$subnet" = "255.255.255.255" ]; then
+            ip route replace "$gateway" dev "$interface" || return 1
+        fi
+        route add default gw "$gateway" dev "$interface" metric "$metric" || return 1
+        metric=$((metric + 1))
+    done
+}
+
+configure_dns() {
+    if [ -z "$dns" ]; then
+        echo "udhcpc: no DNS servers supplied by DHCP; keeping the existing configuration." >&2
+        return 0
+    fi
+    local resolver_file temporary_file server
+    resolver_file=$(readlink -f "$RESOLV_CONF" 2>/dev/null || echo "$RESOLV_CONF")
+    temporary_file=$(mktemp "$resolver_file.XXXXXX") || return 1
+    if ! {
+        [ -n "$domain" ] && printf 'search %s\n' "$domain"
+        for server in $dns; do
+            printf 'nameserver %s\n' "$server"
+        done
+    } > "$temporary_file"; then
+        rm -f "$temporary_file"
+        return 1
+    fi
+    if ! chmod 644 "$temporary_file" || ! mv -f "$temporary_file" "$resolver_file"; then
+        rm -f "$temporary_file"
+        return 1
+    fi
+}
+
+main() {
+    case "${1:-}" in
+        deconfig)
+            ifconfig "$interface" 0.0.0.0
+            ;;
+        bound|renew)
+            configure_address || return 1
+            configure_routes || return 1
+            configure_dns || return 1
+            ;;
+        *)
+            [ -n "${1:-}" ] || { echo "Error: this script must be invoked by udhcpc." >&2; return 1; }
+            ;;
+    esac
+}
+
+main "$@"

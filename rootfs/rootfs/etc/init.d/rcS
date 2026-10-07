@@ -1,16 +1,31 @@
 #!/bin/sh
 
-PATH=/sbin:/bin:/usr/sbin:/uer/bin
-LD_LIBPARY_PATH=$LD_LIBPARY_PATH:/lib:/usr/lib
-export PATH LD_LIBPARY_PATH                         # runlevel
+PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LD_LIBRARY_PATH=/lib:/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export PATH LD_LIBRARY_PATH
 
+mount_filesystems() {
+    mount -a
+    mkdir -p /dev/pts
+    mount -t devpts devpts /dev/pts
+}
 
-mount -a
-mkdir /dev/pts
-mount -t devpts devpts /dev/pts
+setup_devices() {
+    echo /sbin/mdev > /proc/sys/kernel/hotplug
+    mdev -s
+}
 
-echo /sbin/mdev > /proc/sys/kernel/hotplug
-mdev -s
+start_network() {
+    ifconfig lo 127.0.0.1 up
+    ifconfig eth0 up
+    # The callback sets the address, gateway and DNS; the client renews leases in the background.
+    udhcpc -b -i eth0 -s /usr/share/udhcpc/default.script
+}
 
-ifconfig eth0 up
-ifconfig eth0 192.168.31.122
+main() {
+    mount_filesystems
+    setup_devices
+    start_network
+}
+
+main

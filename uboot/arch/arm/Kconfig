@@ -1,0 +1,52 @@
+menu "ARM architecture"
+	depends on ARM
+
+config SYS_ARCH
+	default "arm"
+
+config ARM64
+	bool
+
+config HAS_VBAR
+	bool
+
+config HAS_THUMB2
+	bool
+
+config CPU_V7
+	bool
+	select HAS_VBAR
+	select HAS_THUMB2
+
+config SYS_CPU
+	default "armv7" if CPU_V7
+
+config SEMIHOSTING
+	bool "support boot from semihosting"
+	help
+	  In emulated environments, semihosting is a way for
+	  the hosted environment to call out to the emulator to
+	  retrieve files from the host machine.
+
+config SYS_L2CACHE_OFF
+	bool "L2cache off"
+	help
+	  If SoC does not support L2CACHE or one do not want to enable
+	  L2CACHE, choose this option.
+
+choice
+	prompt "Target select"
+	default ARCH_MX6
+
+config ARCH_MX6
+	bool "Freescale MX6"
+	select CPU_V7
+
+endchoice
+
+source "arch/arm/cpu/armv7/mx6/Kconfig"
+source "arch/arm/cpu/armv7/Kconfig"
+source "arch/arm/imx-common/Kconfig"
+source "arch/arm/Kconfig.debug"
+
+endmenu

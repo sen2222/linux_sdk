@@ -1,0 +1,34 @@
+if ARCH_MX6
+
+config MX6
+	bool
+	default y
+
+# i.MX6ULL shares the i.MX6UL register layout and common code.
+config MX6UL
+	select SYS_L2CACHE_OFF
+	select ROM_UNIFIED_SECTIONS
+	bool
+
+config MX6ULL
+	bool
+	select MX6UL
+
+choice
+	prompt "MX6 board select"
+	optional
+
+config TARGET_MX6ULL_SEN_EMMC
+	bool "Support mx6ull_sen_emmc"
+	select MX6ULL
+	select DM
+	select DM_THERMAL
+
+endchoice
+
+config SYS_SOC
+	default "mx6"
+
+source "board/freescale/mx6ull_sen_emmc/Kconfig"
+
+endif

@@ -29,8 +29,11 @@ Module.markers
 # =================================
 # 项目特定目录
 # =================================
-share/
-tftp_share/
+/share/
+/tftp_share/
+/out/
+/build/.build-all.*/
+__pycache__/
 
 # =================================
 # 通用忽略规则
@@ -70,3 +73,6 @@ cscope.*
 
 # 其他编辑器
 .idea/
+
+# Keep the bundled toolchain's required prebuilt objects and libraries.
+!/tool/compile-chain/**
