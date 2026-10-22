@@ -20,6 +20,7 @@
 #include <linux/input/mt.h>
 #include <linux/module.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/irq.h>
 #include <linux/interrupt.h>
 #include <linux/slab.h>
@@ -34,6 +35,10 @@ struct goodix_ts_data {
 	int abs_y_max;
 	unsigned int max_touch_num;
 	unsigned int int_trigger_type;
+	struct gpio_desc *gpiod_int;
+	struct gpio_desc *gpiod_rst;
+	u16 config_addr;
+	unsigned int config_len;
 };
 
 #define GOODIX_MAX_HEIGHT		4096
@@ -47,6 +52,7 @@ struct goodix_ts_data {
 /* Register defines */
 #define GOODIX_READ_COOR_ADDR		0x814E
 #define GOODIX_REG_CONFIG_DATA		0x8047
+#define GOODIX_GT1X_REG_CONFIG_DATA	0x8050
 #define GOODIX_REG_VERSION		0x8140
 
 #define RESOLUTION_LOC		1
@@ -59,6 +65,63 @@ static const unsigned long goodix_irq_flags[] = {
 	IRQ_TYPE_LEVEL_LOW,
 	IRQ_TYPE_LEVEL_HIGH,
 };
+
+/* Chip layouts and reset timing follow the upstream Linux Goodix driver. */
+static void goodix_select_config(struct goodix_ts_data *ts, u16 id)
+{
+	ts->config_addr = GOODIX_REG_CONFIG_DATA;
+	ts->config_len = GOODIX_CONFIG_MAX_LENGTH;
+	switch (id) {
+	case 1151:
+	case 1158:
+		ts->config_addr = GOODIX_GT1X_REG_CONFIG_DATA;
+		break;
+	case 911:
+	case 9110:
+	case 927:
+	case 9271:
+	case 928:
+		ts->config_len = 186;
+		break;
+	case 912:
+	case 967:
+		ts->config_len = 228;
+		break;
+	}
+}
+
+static int goodix_reset(struct goodix_ts_data *ts)
+{
+	int error;
+
+	if (!ts->gpiod_int && !ts->gpiod_rst)
+		return 0;
+	if (!ts->gpiod_int || !ts->gpiod_rst)
+		return -EINVAL;
+
+	/* Use physical levels regardless of GPIO_ACTIVE_LOW in the DT. */
+	error = gpiod_direction_output_raw(ts->gpiod_rst, 0);
+	if (error)
+		return error;
+	msleep(20);
+	error = gpiod_direction_output_raw(ts->gpiod_int,
+					   ts->client->addr == 0x14);
+	if (error)
+		return error;
+	usleep_range(100, 2000);
+	error = gpiod_direction_output_raw(ts->gpiod_rst, 1);
+	if (error)
+		return error;
+	usleep_range(6000, 10000);
+	error = gpiod_direction_input(ts->gpiod_rst);
+	if (error)
+		return error;
+	error = gpiod_direction_output_raw(ts->gpiod_int, 0);
+	if (error)
+		return error;
+	msleep(50);
+	return gpiod_direction_input(ts->gpiod_int);
+}
 
 /**
  * goodix_i2c_read - read data from a register of the i2c slave device.
@@ -91,15 +154,24 @@ static int goodix_i2c_read(struct i2c_client *client,
 
 static int goodix_ts_read_input_report(struct goodix_ts_data *ts, u8 *data)
 {
+	unsigned long timeout = jiffies + msecs_to_jiffies(20);
 	int touch_num;
 	int error;
 
-	error = goodix_i2c_read(ts->client, GOODIX_READ_COOR_ADDR, data,
+	/* Data-ready may lag the interrupt by about 10 ms. */
+	do {
+		error = goodix_i2c_read(ts->client, GOODIX_READ_COOR_ADDR, data,
 				GOODIX_CONTACT_SIZE + 1);
-	if (error) {
-		dev_err(&ts->client->dev, "I2C transfer error: %d\n", error);
-		return error;
-	}
+		if (error) {
+			dev_err(&ts->client->dev, "I2C transfer error: %d\n", error);
+			return error;
+		}
+		if (data[0] & BIT(7))
+			break;
+		usleep_range(1000, 2000);
+	} while (time_before(jiffies, timeout));
+	if (!(data[0] & BIT(7)))
+		return 0;
 
 	touch_num = data[0] & 0x0f;
 	if (touch_num > ts->max_touch_num)
@@ -144,7 +216,7 @@ static void goodix_ts_report_touch(struct goodix_ts_data *ts, u8 *coor_data)
  */
 static void goodix_process_events(struct goodix_ts_data *ts)
 {
-	u8  point_data[1 + GOODIX_CONTACT_SIZE * ts->max_touch_num];
+	u8  point_data[1 + GOODIX_CONTACT_SIZE * GOODIX_MAX_CONTACTS];
 	int touch_num;
 	int i;
 
@@ -195,9 +267,9 @@ static void goodix_read_config(struct goodix_ts_data *ts)
 	u8 config[GOODIX_CONFIG_MAX_LENGTH];
 	int error;
 
-	error = goodix_i2c_read(ts->client, GOODIX_REG_CONFIG_DATA,
+	error = goodix_i2c_read(ts->client, ts->config_addr,
 			      config,
-			   GOODIX_CONFIG_MAX_LENGTH);
+			   ts->config_len);
 	if (error) {
 		dev_warn(&ts->client->dev,
 			 "Error reading config (%d), using defaults\n",
@@ -213,7 +285,9 @@ static void goodix_read_config(struct goodix_ts_data *ts)
 	ts->abs_y_max = get_unaligned_le16(&config[RESOLUTION_LOC + 2]);
 	ts->int_trigger_type = config[TRIGGER_LOC] & 0x03;
 	ts->max_touch_num = config[MAX_CONTACTS_LOC] & 0x0f;
-	if (!ts->abs_x_max || !ts->abs_y_max || !ts->max_touch_num) {
+	if (ts->abs_x_max < 2 || ts->abs_x_max > GOODIX_MAX_WIDTH ||
+	    ts->abs_y_max < 2 || ts->abs_y_max > GOODIX_MAX_HEIGHT ||
+	    !ts->max_touch_num || ts->max_touch_num > GOODIX_MAX_CONTACTS) {
 		dev_err(&ts->client->dev,
 			"Invalid config, using defaults\n");
 		ts->abs_x_max = GOODIX_MAX_WIDTH;
@@ -228,10 +302,13 @@ static void goodix_read_config(struct goodix_ts_data *ts)
  * @client: the i2c client
  * @version: output buffer containing the version on success
  */
-static int goodix_read_version(struct i2c_client *client, u16 *version)
+static int goodix_read_version(struct goodix_ts_data *ts)
 {
 	int error;
 	u8 buf[6];
+	char id_str[5];
+	u16 id;
+	struct i2c_client *client = ts->client;
 
 	error = goodix_i2c_read(client, GOODIX_REG_VERSION, buf, sizeof(buf));
 	if (error) {
@@ -239,10 +316,13 @@ static int goodix_read_version(struct i2c_client *client, u16 *version)
 		return error;
 	}
 
-	if (version)
-		*version = get_unaligned_le16(&buf[4]);
-
-	dev_info(&client->dev, "IC VERSION: %6ph\n", buf);
+	memcpy(id_str, buf, 4);
+	id_str[4] = '\0';
+	if (kstrtou16(id_str, 10, &id))
+		id = 0;
+	goodix_select_config(ts, id);
+	dev_info(&client->dev, "ID %s, firmware %04x, config 0x%04x\n",
+		 id_str, get_unaligned_le16(&buf[4]), ts->config_addr);
 
 	return 0;
 }
@@ -259,7 +339,7 @@ static int goodix_i2c_test(struct i2c_client *client)
 	u8 test;
 
 	while (retry++ < 2) {
-		error = goodix_i2c_read(client, GOODIX_REG_CONFIG_DATA,
+		error = goodix_i2c_read(client, GOODIX_REG_VERSION,
 					&test, 1);
 		if (!error)
 			return 0;
@@ -300,8 +380,10 @@ static int goodix_request_input_dev(struct goodix_ts_data *ts)
 	input_set_abs_params(ts->input_dev, ABS_MT_WIDTH_MAJOR, 0, 255, 0, 0);
 	input_set_abs_params(ts->input_dev, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0);
 
-	input_mt_init_slots(ts->input_dev, ts->max_touch_num,
+	error = input_mt_init_slots(ts->input_dev, ts->max_touch_num,
 			    INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
+	if (error)
+		return error;
 
 	ts->input_dev->name = "Goodix Capacitive TouchScreen";
 	ts->input_dev->phys = "input/ts";
@@ -326,7 +408,6 @@ static int goodix_ts_probe(struct i2c_client *client,
 	struct goodix_ts_data *ts;
 	unsigned long irq_flags;
 	int error;
-	u16 version_info;
 
 	dev_dbg(&client->dev, "I2C Address: 0x%02x\n", client->addr);
 
@@ -341,6 +422,17 @@ static int goodix_ts_probe(struct i2c_client *client,
 
 	ts->client = client;
 	i2c_set_clientdata(client, ts);
+	ts->gpiod_int = devm_gpiod_get_optional(&client->dev, "irq", GPIOD_IN);
+	if (IS_ERR(ts->gpiod_int))
+		return PTR_ERR(ts->gpiod_int);
+	ts->gpiod_rst = devm_gpiod_get_optional(&client->dev, "reset", GPIOD_ASIS);
+	if (IS_ERR(ts->gpiod_rst))
+		return PTR_ERR(ts->gpiod_rst);
+	error = goodix_reset(ts);
+	if (error) {
+		dev_err(&client->dev, "GPIO reset failed: %d\n", error);
+		return error;
+	}
 
 	error = goodix_i2c_test(client);
 	if (error) {
@@ -348,7 +440,7 @@ static int goodix_ts_probe(struct i2c_client *client,
 		return error;
 	}
 
-	error = goodix_read_version(client, &version_info);
+	error = goodix_read_version(ts);
 	if (error) {
 		dev_err(&client->dev, "Read version failed.\n");
 		return error;
@@ -387,6 +479,9 @@ MODULE_DEVICE_TABLE(acpi, goodix_acpi_match);
 
 #ifdef CONFIG_OF
 static const struct of_device_id goodix_of_match[] = {
+	{ .compatible = "goodix,gt1158" },
+	{ .compatible = "goodix,gt9147" },
+	{ .compatible = "goodix,gt1151" },
 	{ .compatible = "goodix,gt911" },
 	{ .compatible = "goodix,gt9110" },
 	{ .compatible = "goodix,gt912" },

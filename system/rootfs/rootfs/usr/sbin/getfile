@@ -1,0 +1,6 @@
+#!/bin/sh
+
+SERVER_IP=192.168.31.182
+SERVER_PORT=9000
+
+file_client $SERVER_IP $SERVER_PORT cp $1 $2

@@ -19,6 +19,24 @@
 		stdout-path = &uart1;
 	};
 
+	/* The module supplies XCLK; the connector MCLK pin controls its LED. */
+	ov5640_xclk: camera-oscillator {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+	};
+
+	camera_leds {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_camera_led>;
+		flash {
+			label = "ov5640-flash";
+			gpios = <&gpio4 17 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+		};
+	};
+
 	memory {
 		reg = <0x80000000 0x20000000>;
 	};
@@ -68,8 +86,8 @@
 			regulator-name = "VSD_3V3";
 			regulator-min-microvolt = <3300000>;
 			regulator-max-microvolt = <3300000>;
-			gpio = <&gpio1 9 GPIO_ACTIVE_HIGH>;
-			enable-active-high;
+			/* ALPHA SD power is fixed; GPIO1_IO09 is CT_INT. */
+			regulator-always-on;
 		};
 
 		reg_gpio_dvfs: regulator-gpio {
@@ -302,6 +320,19 @@
 	pinctrl-0 = <&pinctrl_i2c2>;
 	status = "okay";
 
+	touchscreen@14 {
+		/* TFT4384 controller identified as GT1158 on this board. */
+		compatible = "goodix,gt1158", "goodix,gt911";
+		reg = <0x14>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_touch_irq &pinctrl_touch_reset>;
+		interrupt-parent = <&gpio1>;
+		interrupts = <9 IRQ_TYPE_EDGE_FALLING>;
+		irq-gpios = <&gpio1 9 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&gpio5 9 GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
+
 	codec: wm8960@1a {
 		compatible = "wlf,wm8960";
 		reg = <0x1a>;
@@ -315,10 +346,10 @@
 		reg = <0x3c>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_csi1>;
-		clocks = <&clks IMX6UL_CLK_CSI>;
+		clocks = <&ov5640_xclk>;
 		clock-names = "csi_mclk";
-		pwn-gpios = <&gpio_spi 6 1>;
-		rst-gpios = <&gpio_spi 5 0>;
+		pwn-gpios = <&gpio1 4 GPIO_ACTIVE_HIGH>;
+		rst-gpios = <&gpio1 2 GPIO_ACTIVE_LOW>;
 		csi_id = <0>;
 		mclk = <24000000>;
 		mclk_source = <0>;
@@ -339,7 +370,6 @@
 			fsl,pins = <
 				MX6UL_PAD_UART1_RTS_B__GPIO1_IO19	0x17059 /* SD1 CD */
 				MX6UL_PAD_GPIO1_IO05__USDHC1_VSELECT	0x17059 /* SD1 VSELECT */
-				MX6UL_PAD_GPIO1_IO09__GPIO1_IO09        0x17059 /* SD1 RESET */
 			>;
 		};
 
@@ -366,7 +396,8 @@
 
 		pinctrl_csi1: csi1grp {
 			fsl,pins = <
-				MX6UL_PAD_CSI_MCLK__CSI_MCLK		0x1b088
+				MX6UL_PAD_GPIO1_IO02__GPIO1_IO02	0x10b0
+				MX6UL_PAD_GPIO1_IO04__GPIO1_IO04	0x10b0
 				MX6UL_PAD_CSI_PIXCLK__CSI_PIXCLK	0x1b088
 				MX6UL_PAD_CSI_VSYNC__CSI_VSYNC		0x1b088
 				MX6UL_PAD_CSI_HSYNC__CSI_HSYNC		0x1b088
@@ -379,6 +410,10 @@
 				MX6UL_PAD_CSI_DATA06__CSI_DATA08	0x1b088
 				MX6UL_PAD_CSI_DATA07__CSI_DATA09	0x1b088
 			>;
+		};
+
+		pinctrl_camera_led: cameraledgrp {
+			fsl,pins = <MX6UL_PAD_CSI_MCLK__GPIO4_IO17 0x10b0>;
 		};
 
 		pinctrl_enet1: enet1grp {
@@ -435,6 +470,10 @@
 				MX6UL_PAD_UART5_TX_DATA__I2C2_SCL 0x4001b8b0
 				MX6UL_PAD_UART5_RX_DATA__I2C2_SDA 0x4001b8b0
 			>;
+		};
+
+		pinctrl_touch_irq: touchirqgrp {
+			fsl,pins = <MX6UL_PAD_GPIO1_IO09__GPIO1_IO09 0x1b0b0>;
 		};
 
 		pinctrl_lcdif_dat: lcdifdatgrp {
@@ -649,9 +688,9 @@
                         >;
                 };
 		
-		pinctrl_lcdif_reset: lcdifresetgrp {
+		pinctrl_touch_reset: touchresetgrp {
                         fsl,pins = <
-                                /* used for lcd reset */
+                                /* Capacitive touch reset on the ALPHA board. */
                                 MX6ULL_PAD_SNVS_TAMPER9__GPIO5_IO09  0x79
                         >;
                 };
@@ -689,8 +728,7 @@
 &lcdif {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_lcdif_dat
-		     &pinctrl_lcdif_ctrl
-		     &pinctrl_lcdif_reset>;
+		     &pinctrl_lcdif_ctrl>;
 	display = <&display0>;
 	status = "okay";
 
@@ -766,7 +804,7 @@
 	/* xnur-gpio = <&gpio1 3 GPIO_ACTIVE_LOW>; */
 	measure-delay-time = <0xffff>;
 	pre-charge-time = <0xfff>;
-	status = "okay";
+	status = "disabled";
 };
 
 &uart1 {

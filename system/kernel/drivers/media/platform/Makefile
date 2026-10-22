@@ -50,7 +50,9 @@ obj-$(CONFIG_VIDEO_AM437X_VPFE)		+= am437x/
 
 obj-$(CONFIG_VIDEO_XILINX)		+= xilinx/
 
+ifeq ($(CONFIG_VIDEO_MXC_IPU_CAMERA),y)
 obj-$(CONFIG_VIDEO_MXC_CAPTURE)	+= mxc/capture/
+endif
 obj-$(CONFIG_VIDEO_MXC_CAPTURE)	+= mxc/subdev/
 obj-$(CONFIG_VIDEO_MXC_OUTPUT)  += mxc/output/
 

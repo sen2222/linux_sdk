@@ -847,6 +847,31 @@ static int mx6s_configure_csi(struct mx6s_csi_dev *csi_dev)
 	return 0;
 }
 
+static void mx6s_return_buffers(struct mx6s_csi_dev *csi_dev,
+                               enum vb2_buffer_state state)
+{
+	struct mx6s_buf_internal *ibuf;
+	struct mx6s_buffer *buf;
+	unsigned long flags;
+	struct list_head *heads[] = { &csi_dev->active_bufs, &csi_dev->capture,
+				     &csi_dev->discard };
+	int i;
+
+	spin_lock_irqsave(&csi_dev->slock, flags);
+	for (i = 0; i < ARRAY_SIZE(heads); i++) {
+		while (!list_empty(heads[i])) {
+			ibuf = list_first_entry(heads[i], struct mx6s_buf_internal, queue);
+			list_del_init(&ibuf->queue);
+			if (ibuf->discard)
+				continue;
+			buf = mx6s_ibuf_to_buf(ibuf);
+			if (buf->vb.state == VB2_BUF_STATE_ACTIVE)
+				vb2_buffer_done(&buf->vb, state);
+		}
+	}
+	spin_unlock_irqrestore(&csi_dev->slock, flags);
+}
+
 static int mx6s_start_streaming(struct vb2_queue *vq, unsigned int count)
 {
 	struct mx6s_csi_dev *csi_dev = vb2_get_drv_priv(vq);
@@ -854,9 +879,12 @@ static int mx6s_start_streaming(struct vb2_queue *vq, unsigned int count)
 	struct mx6s_buffer *buf;
 	unsigned long phys;
 	unsigned long flags;
+	int ret;
 
-	if (count < 2)
-		return -ENOBUFS;
+	if (count < 2) {
+		ret = -ENOBUFS;
+		goto return_buffers;
+	}
 
 	/*
 	 * I didn't manage to properly enable/disable
@@ -870,8 +898,10 @@ static int mx6s_start_streaming(struct vb2_queue *vq, unsigned int count)
 					PAGE_ALIGN(csi_dev->discard_size),
 					&csi_dev->discard_buffer_dma,
 					GFP_DMA | GFP_KERNEL);
-	if (!csi_dev->discard_buffer)
-		return -ENOMEM;
+	if (!csi_dev->discard_buffer) {
+		ret = -ENOMEM;
+		goto return_buffers;
+	}
 
 	spin_lock_irqsave(&csi_dev->slock, flags);
 
@@ -908,46 +938,34 @@ static int mx6s_start_streaming(struct vb2_queue *vq, unsigned int count)
 
 	spin_unlock_irqrestore(&csi_dev->slock, flags);
 
-	return mx6s_csi_enable(csi_dev);
+	ret = mx6s_csi_enable(csi_dev);
+	if (!ret)
+		return 0;
+	mx6s_csi_disable(csi_dev);
+	synchronize_irq(csi_dev->irq);
+	dma_free_coherent(csi_dev->v4l2_dev.dev,
+			 PAGE_ALIGN(csi_dev->discard_size), csi_dev->discard_buffer,
+			 csi_dev->discard_buffer_dma);
+	csi_dev->discard_buffer = NULL;
+return_buffers:
+	/* vb2 requires QUEUED, not ERROR, when start_streaming fails. */
+	mx6s_return_buffers(csi_dev, VB2_BUF_STATE_QUEUED);
+	return ret;
 }
 
 static void mx6s_stop_streaming(struct vb2_queue *vq)
 {
 	struct mx6s_csi_dev *csi_dev = vb2_get_drv_priv(vq);
-	unsigned long flags;
-	struct mx6s_buffer *buf, *tmp;
-	void *b;
 
 	mx6s_csi_disable(csi_dev);
-
-	spin_lock_irqsave(&csi_dev->slock, flags);
-
-	list_for_each_entry_safe(buf, tmp,
-				&csi_dev->active_bufs, internal.queue) {
-		list_del_init(&buf->internal.queue);
-		if (buf->vb.state == VB2_BUF_STATE_ACTIVE)
-			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_ERROR);
+	synchronize_irq(csi_dev->irq);
+	mx6s_return_buffers(csi_dev, VB2_BUF_STATE_ERROR);
+	if (csi_dev->discard_buffer) {
+		dma_free_coherent(csi_dev->v4l2_dev.dev,
+				 PAGE_ALIGN(csi_dev->discard_size), csi_dev->discard_buffer,
+				 csi_dev->discard_buffer_dma);
+		csi_dev->discard_buffer = NULL;
 	}
-
-	list_for_each_entry_safe(buf, tmp,
-				&csi_dev->capture, internal.queue) {
-		list_del_init(&buf->internal.queue);
-		if (buf->vb.state == VB2_BUF_STATE_ACTIVE)
-			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_ERROR);
-	}
-
-	INIT_LIST_HEAD(&csi_dev->capture);
-	INIT_LIST_HEAD(&csi_dev->active_bufs);
-	INIT_LIST_HEAD(&csi_dev->discard);
-
-	b = csi_dev->discard_buffer;
-	csi_dev->discard_buffer = NULL;
-
-	spin_unlock_irqrestore(&csi_dev->slock, flags);
-
-	dma_free_coherent(csi_dev->v4l2_dev.dev,
-				csi_dev->discard_size, b,
-				csi_dev->discard_buffer_dma);
 }
 
 static struct vb2_ops mx6s_videobuf_ops = {
@@ -1149,9 +1167,21 @@ static int mx6s_csi_open(struct file *file)
 	if (mutex_lock_interruptible(&csi_dev->lock))
 		return -ERESTARTSYS;
 
-	csi_dev->alloc_ctx = vb2_dma_contig_init_ctx(csi_dev->dev);
-	if (IS_ERR(csi_dev->alloc_ctx))
+	if (!sd) {
+		ret = -ENODEV;
 		goto unlock;
+	}
+	if (csi_dev->alloc_ctx) {
+		ret = -EBUSY;
+		goto unlock;
+	}
+
+	csi_dev->alloc_ctx = vb2_dma_contig_init_ctx(csi_dev->dev);
+	if (IS_ERR(csi_dev->alloc_ctx)) {
+		ret = PTR_ERR(csi_dev->alloc_ctx);
+		csi_dev->alloc_ctx = NULL;
+		goto unlock;
+	}
 
 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	q->io_modes = VB2_MMAP | VB2_USERPTR;
@@ -1178,6 +1208,7 @@ static int mx6s_csi_open(struct file *file)
 	return ret;
 eallocctx:
 	vb2_dma_contig_cleanup_ctx(csi_dev->alloc_ctx);
+	csi_dev->alloc_ctx = NULL;
 unlock:
 	mutex_unlock(&csi_dev->lock);
 	return ret;
@@ -1196,6 +1227,7 @@ static int mx6s_csi_close(struct file *file)
 	v4l2_subdev_call(sd, core, s_power, 0);
 
 	vb2_dma_contig_cleanup_ctx(csi_dev->alloc_ctx);
+	csi_dev->alloc_ctx = NULL;
 	mutex_unlock(&csi_dev->lock);
 
 	file->private_data = NULL;
@@ -1437,6 +1469,7 @@ static int mx6s_vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 
 	csi_dev->fmt           = format_by_fourcc(f->fmt.pix.pixelformat);
 	csi_dev->mbus_code     = csi_dev->fmt->mbus_code;
+	csi_dev->pix = f->fmt.pix;
 	csi_dev->pix.width     = f->fmt.pix.width;
 	csi_dev->pix.height    = f->fmt.pix.height;
 	csi_dev->pix.sizeimage = f->fmt.pix.sizeimage;
@@ -1590,7 +1623,7 @@ static int mx6s_vidioc_enum_framesizes(struct file *file, void *priv,
 	int ret;
 
 	fmt = format_by_fourcc(fsize->pixel_format);
-	if (fmt->pixelformat != fsize->pixel_format)
+	if (!fmt || fmt->pixelformat != fsize->pixel_format)
 		return -EINVAL;
 	fse.code = fmt->mbus_code;
 
@@ -1632,7 +1665,7 @@ static int mx6s_vidioc_enum_frameintervals(struct file *file, void *priv,
 	int ret;
 
 	fmt = format_by_fourcc(interval->pixel_format);
-	if (fmt->pixelformat != interval->pixel_format)
+	if (!fmt || fmt->pixelformat != interval->pixel_format)
 		return -EINVAL;
 	fie.code = fmt->mbus_code;
 

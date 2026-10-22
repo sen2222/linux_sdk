@@ -3,6 +3,9 @@ Device tree bindings for Goodix GT9xx series touchscreen controller
 Required properties:
 
  - compatible		: Should be "goodix,gt911"
+			 or "goodix,gt9147"
+			 or "goodix,gt1151"
+			 or "goodix,gt1158"
 				 or "goodix,gt9110"
 				 or "goodix,gt912"
 				 or "goodix,gt927"
@@ -12,6 +15,16 @@ Required properties:
  - reg			: I2C address of the chip. Should be 0x5d or 0x14
  - interrupt-parent	: Interrupt controller to which the chip is connected
  - interrupts		: Interrupt to which the chip is connected
+
+Optional properties:
+
+ - irq-gpios             : Interrupt GPIO, also used for address selection
+ - reset-gpios           : Reset GPIO. Provide both GPIO properties to enable
+                           the power-on reset and I2C address selection.
+
+The driver reads the chip ID and selects the GT9xx or GT1151/GT1158 config layout.
+GPIO reset uses physical levels: RESET low asserts reset, and INT high during
+reset selects address 0x14 (INT low selects 0x5d).
 
 Example:
 

@@ -663,55 +663,79 @@ static int ov5640_regulator_enable(struct device *dev)
 {
 	int ret = 0;
 
-	io_regulator = devm_regulator_get(dev, "DOVDD");
-	if (!IS_ERR(io_regulator)) {
+	io_regulator = NULL;
+	if (of_find_property(dev->of_node, "DOVDD-supply", NULL))
+		io_regulator = devm_regulator_get(dev, "DOVDD");
+	if (IS_ERR(io_regulator)) {
+		ret = PTR_ERR(io_regulator);
+		io_regulator = NULL;
+		return ret;
+	}
+	if (!IS_ERR_OR_NULL(io_regulator)) {
 		regulator_set_voltage(io_regulator,
 				      OV5640_VOLTAGE_DIGITAL_IO,
 				      OV5640_VOLTAGE_DIGITAL_IO);
 		ret = regulator_enable(io_regulator);
 		if (ret) {
 			dev_err(dev, "set io voltage failed\n");
+			io_regulator = NULL;
 			return ret;
 		} else {
 			dev_dbg(dev, "set io voltage ok\n");
 		}
 	} else {
 		io_regulator = NULL;
-		dev_warn(dev, "cannot get io voltage\n");
+		dev_dbg(dev, "DOVDD supplied by the camera module\n");
 	}
 
-	core_regulator = devm_regulator_get(dev, "DVDD");
-	if (!IS_ERR(core_regulator)) {
+	core_regulator = NULL;
+	if (of_find_property(dev->of_node, "DVDD-supply", NULL))
+		core_regulator = devm_regulator_get(dev, "DVDD");
+	if (IS_ERR(core_regulator)) {
+		ret = PTR_ERR(core_regulator);
+		core_regulator = NULL;
+		return ret;
+	}
+	if (!IS_ERR_OR_NULL(core_regulator)) {
 		regulator_set_voltage(core_regulator,
 				      OV5640_VOLTAGE_DIGITAL_CORE,
 				      OV5640_VOLTAGE_DIGITAL_CORE);
 		ret = regulator_enable(core_regulator);
 		if (ret) {
 			dev_err(dev, "set core voltage failed\n");
+			core_regulator = NULL;
 			return ret;
 		} else {
 			dev_dbg(dev, "set core voltage ok\n");
 		}
 	} else {
 		core_regulator = NULL;
-		dev_warn(dev, "cannot get core voltage\n");
+		dev_dbg(dev, "DVDD supplied by the camera module\n");
 	}
 
-	analog_regulator = devm_regulator_get(dev, "AVDD");
-	if (!IS_ERR(analog_regulator)) {
+	analog_regulator = NULL;
+	if (of_find_property(dev->of_node, "AVDD-supply", NULL))
+		analog_regulator = devm_regulator_get(dev, "AVDD");
+	if (IS_ERR(analog_regulator)) {
+		ret = PTR_ERR(analog_regulator);
+		analog_regulator = NULL;
+		return ret;
+	}
+	if (!IS_ERR_OR_NULL(analog_regulator)) {
 		regulator_set_voltage(analog_regulator,
 				      OV5640_VOLTAGE_ANALOG,
 				      OV5640_VOLTAGE_ANALOG);
 		ret = regulator_enable(analog_regulator);
 		if (ret) {
 			dev_err(dev, "set analog voltage failed\n");
+			analog_regulator = NULL;
 			return ret;
 		} else {
 			dev_dbg(dev, "set analog voltage ok\n");
 		}
 	} else {
 		analog_regulator = NULL;
-		dev_warn(dev, "cannot get analog voltage\n");
+		dev_dbg(dev, "AVDD supplied by the camera module\n");
 	}
 
 	return ret;
@@ -720,15 +744,17 @@ static int ov5640_regulator_enable(struct device *dev)
 static s32 ov5640_write_reg(u16 reg, u8 val)
 {
 	u8 au8Buf[3] = {0};
+	int ret;
 
 	au8Buf[0] = reg >> 8;
 	au8Buf[1] = reg & 0xff;
 	au8Buf[2] = val;
 
-	if (i2c_master_send(ov5640_data.i2c_client, au8Buf, 3) < 0) {
+	ret = i2c_master_send(ov5640_data.i2c_client, au8Buf, 3);
+	if (ret != 3) {
 		pr_err("%s:write reg error:reg=%x,val=%x\n",
 			__func__, reg, val);
-		return -1;
+		return ret < 0 ? ret : -EIO;
 	}
 
 	return 0;
@@ -1386,10 +1412,19 @@ static int ov5640_s_power(struct v4l2_subdev *sd, int on)
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	struct ov5640 *sensor = to_ov5640(client);
 
-	if (on)
-		clk_enable(ov5640_data.sensor_clk);
-	else
-		clk_disable(ov5640_data.sensor_clk);
+	int ret;
+
+	if (sensor->on == !!on)
+		return 0;
+	if (on) {
+		ret = clk_enable(sensor->sensor_clk);
+		if (ret)
+			return ret;
+		ov5640_power_down(0);
+	} else {
+		ov5640_power_down(1);
+		clk_disable(sensor->sensor_clk);
+	}
 
 	sensor->on = on;
 
@@ -1489,6 +1524,7 @@ static int ov5640_s_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *a)
 			frame_rate = ov5640_30_fps;
 		else {
 			pr_err(" The camera frame rate is not supported!\n");
+			ret = -EINVAL;
 			goto error;
 		}
 
@@ -1529,13 +1565,18 @@ static int ov5640_try_fmt(struct v4l2_subdev *sd,
 			  struct v4l2_mbus_framefmt *mf)
 {
 	const struct ov5640_datafmt *fmt = ov5640_find_datafmt(mf->code);
+	struct ov5640 *sensor = to_ov5640(v4l2_get_subdevdata(sd));
 
 	if (!fmt) {
 		mf->code	= ov5640_colour_fmts[0].code;
 		mf->colorspace	= ov5640_colour_fmts[0].colorspace;
-	}
+	} else
+		mf->colorspace = fmt->colorspace;
 
 	mf->field	= V4L2_FIELD_NONE;
+	/* The legacy capturemode ioctl programs the sensor resolution. */
+	mf->width = sensor->pix.width;
+	mf->height = sensor->pix.height;
 
 	return 0;
 }
@@ -1567,6 +1608,8 @@ static int ov5640_g_fmt(struct v4l2_subdev *sd,
 	mf->code	= fmt->code;
 	mf->colorspace	= fmt->colorspace;
 	mf->field	= V4L2_FIELD_NONE;
+	mf->width = sensor->pix.width;
+	mf->height = sensor->pix.height;
 
 	return 0;
 }
@@ -1743,6 +1786,7 @@ static int ov5640_probe(struct i2c_client *client,
 	struct pinctrl *pinctrl;
 	struct device *dev = &client->dev;
 	int retval;
+	u32 mclk_source;
 	u8 chip_id_high, chip_id_low;
 
 	/* ov5640 pinctrl */
@@ -1790,11 +1834,12 @@ static int ov5640_probe(struct i2c_client *client,
 	}
 
 	retval = of_property_read_u32(dev->of_node, "mclk_source",
-					(u32 *) &(ov5640_data.mclk_source));
+					&mclk_source);
 	if (retval) {
 		dev_err(dev, "mclk_source invalid\n");
 		return retval;
 	}
+	ov5640_data.mclk_source = mclk_source;
 
 	retval = of_property_read_u32(dev->of_node, "csi_id",
 					&(ov5640_data.csi));
@@ -1804,13 +1849,18 @@ static int ov5640_probe(struct i2c_client *client,
 	}
 
 	/* Set mclk rate before clk on */
-	ov5640_set_clk_rate();
+	retval = ov5640_set_clk_rate();
+	if (retval)
+		return retval;
 
-	clk_prepare_enable(ov5640_data.sensor_clk);
+	retval = clk_prepare_enable(ov5640_data.sensor_clk);
+	if (retval)
+		return retval;
 
 	ov5640_data.io_init = ov5640_reset;
 	ov5640_data.i2c_client = client;
 	ov5640_data.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+	ov5640_data.fmt = &ov5640_colour_fmts[0];
 	ov5640_data.pix.width = 640;
 	ov5640_data.pix.height = 480;
 	ov5640_data.streamcap.capability = V4L2_MODE_HIGHQUALITY |
@@ -1819,7 +1869,9 @@ static int ov5640_probe(struct i2c_client *client,
 	ov5640_data.streamcap.timeperframe.denominator = DEFAULT_FPS;
 	ov5640_data.streamcap.timeperframe.numerator = 1;
 
-	ov5640_regulator_enable(&client->dev);
+	retval = ov5640_regulator_enable(&client->dev);
+	if (retval)
+		goto power_off;
 
 	ov5640_reset();
 
@@ -1827,35 +1879,50 @@ static int ov5640_probe(struct i2c_client *client,
 
 	retval = ov5640_read_reg(OV5640_CHIP_ID_HIGH_BYTE, &chip_id_high);
 	if (retval < 0 || chip_id_high != 0x56) {
-		clk_disable_unprepare(ov5640_data.sensor_clk);
 		pr_warning("camera ov5640 is not found\n");
-		return -ENODEV;
+		retval = -ENODEV;
+		goto power_off;
 	}
 	retval = ov5640_read_reg(OV5640_CHIP_ID_LOW_BYTE, &chip_id_low);
 	if (retval < 0 || chip_id_low != 0x40) {
-		clk_disable_unprepare(ov5640_data.sensor_clk);
 		pr_warning("camera ov5640 is not found\n");
-		return -ENODEV;
+		retval = -ENODEV;
+		goto power_off;
 	}
 
 	retval = init_device();
 	if (retval < 0) {
-		clk_disable_unprepare(ov5640_data.sensor_clk);
 		pr_warning("camera ov5640 init failed\n");
-		ov5640_power_down(1);
-		return retval;
+		goto power_off;
 	}
 
+	ov5640_power_down(1);
 	clk_disable(ov5640_data.sensor_clk);
+	ov5640_data.on = false;
 
 	v4l2_i2c_subdev_init(&ov5640_data.subdev, client, &ov5640_subdev_ops);
 
 	retval = v4l2_async_register_subdev(&ov5640_data.subdev);
-	if (retval < 0)
+	if (retval < 0) {
 		dev_err(&client->dev,
 					"%s--Async register failed, ret=%d\n", __func__, retval);
+		clk_unprepare(ov5640_data.sensor_clk);
+		goto regulators_off;
+	}
 
 	pr_info("camera ov5640, is found\n");
+	return retval;
+
+power_off:
+	ov5640_power_down(1);
+	clk_disable_unprepare(ov5640_data.sensor_clk);
+regulators_off:
+	if (analog_regulator)
+		regulator_disable(analog_regulator);
+	if (core_regulator)
+		regulator_disable(core_regulator);
+	if (io_regulator)
+		regulator_disable(io_regulator);
 	return retval;
 }
 
