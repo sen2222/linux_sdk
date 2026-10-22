@@ -12,7 +12,7 @@ prepare_paths() {
         exit 1
     fi
     rootfs_dir=${1:-"$script_dir/rootfs"}
-    archive=${2:-"$script_dir/../out/rootfs_nogpu.tar.bz2"}
+    archive=${2:-"$script_dir/../../out/rootfs_nogpu.tar.bz2"}
     test -d "$rootfs_dir"
     rootfs_dir=$(cd -- "$rootfs_dir" && pwd -P)
     archive=$(realpath -m -- "$archive")

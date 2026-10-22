@@ -11,6 +11,16 @@ source build/config.sh
 也可以在 `build/` 内执行 `source config.sh`、`./build_all.sh`、`./clean_all.sh`。
 脚本通过自身路径定位 SDK，支持从其他目录调用。
 
+## 目录结构
+
+- `build/`：SDK 总构建、环境配置和清理脚本。
+- `system/`：`kernel/`、`uboot/`、`rootfs/` 和 `tool/`，包含系统源码与工具链。
+- `share/`：`code/` 用户态示例、`dev_node/` 驱动示例及 `docs/` 资料。
+- `out/`：SDK 生成固件和校验文件。
+
+内核、U-Boot 可分别运行 `./system/kernel/build.sh` 和 `./system/uboot/build.sh`。
+`share/dev_node/` 中的 Makefile 默认使用 `system/kernel`，也可通过 `KERNELDIR=...` 指定其他已配置的内核目录；交叉编译前先加载 SDK 环境。
+
 ## 环境配置
 
 `config.sh` 导出 `SDK_ROOT`、`TOOLCHAIN_DIR`、`ARCH=arm`、`CROSS_COMPILE`、
@@ -26,7 +36,7 @@ source build/config.sh
 2. `prepare_output()`：创建暂存输出目录。
 3. `build_uboot()`：调用 U-Boot 构建脚本，收集 `u-boot.imx`。
 4. `build_kernel()`：调用内核构建脚本，收集内核和设备树。
-5. `pack_rootfs()`：直接打包现有 `rootfs/rootfs/`。
+5. `pack_rootfs()`：直接打包现有 `system/rootfs/rootfs/`。
 6. `publish_output()`：生成校验文件，将整组固件更新到 `out/`。
 
 每个步骤先检查 `out/` 中对应的固件：已有非空文件就复用，缺少或为空时才生成。
@@ -37,7 +47,7 @@ source build/config.sh
 rootfs 仅打包现有内容，不编译或安装 BusyBox，不安装内核模块，也不改写原目录。
 已有程序、库、启动配置和模块按原样保留。
 归档保留隐藏文件、软链接和权限，属主统一为 root，排除旧 rootfs 归档。
-修改文件系统内容应直接编辑 `rootfs/rootfs/`。
+修改文件系统内容应直接编辑 `system/rootfs/rootfs/`。
 启动脚本通过 `udhcpc` 自动获取 `eth0` 的 IP、默认网关和 DNS。
 `usr/share/udhcpc/default.script` 处理租约和续租，并更新 `/etc/resolv.conf`。
 网络中需要提供 DHCP 服务；开发板地址以实际租约为准。
@@ -63,5 +73,5 @@ SDK 顶层 `out/` 中的产物为：
 `clean_output()`，清理 U-Boot、kernel 编译产物、生成配置、暂存目录及整个 `out/`。
 清理不需要先 source，保留原始 rootfs、BusyBox 目录、defconfig 和工具链。
 
-只打包 rootfs：`./rootfs/packet.sh`，默认输出 `out/rootfs_nogpu.tar.bz2`。
-也可指定输入和输出：`./rootfs/packet.sh <rootfs目录> <归档路径>`。
+只打包 rootfs：`./system/rootfs/packet.sh`，默认输出 `out/rootfs_nogpu.tar.bz2`。
+也可指定输入和输出：`./system/rootfs/packet.sh <rootfs目录> <归档路径>`。

@@ -8,7 +8,7 @@ fi
 _sdk_configure_environment() {
     local sdk_root toolchain_dir cross_compile jobs sdk_path
     sdk_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd) || return 1
-    toolchain_dir="$sdk_root/tool/compile-chain"
+    toolchain_dir="$sdk_root/system/tool/compile-chain"
     cross_compile="$toolchain_dir/bin/arm-linux-gnueabihf-"
     jobs=${JOBS:-$(getconf _NPROCESSORS_ONLN)}
     if [[ ! $jobs =~ ^[1-9][0-9]*$ ]]; then
@@ -21,8 +21,8 @@ _sdk_configure_environment() {
     fi
     sdk_path=$PATH
     case ":$sdk_path:" in
-        *":$sdk_root/tool/host-tools/bin:"*) ;;
-        *) sdk_path="$sdk_root/tool/host-tools/bin:$sdk_path" ;;
+        *":$sdk_root/system/tool/host-tools/bin:"*) ;;
+        *) sdk_path="$sdk_root/system/tool/host-tools/bin:$sdk_path" ;;
     esac
     case ":$sdk_path:" in
         *":$toolchain_dir/bin:"*) ;;

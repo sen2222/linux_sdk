@@ -16,7 +16,7 @@ rootfs_name="rootfs_nogpu.tar.bz2"
 # Check the SDK environment and required build and packaging tools.
 check_environment() {
     if [[ ${SDK_ROOT:-} != "$sdk_root" || ${ARCH:-} != arm ||
-          ${CROSS_COMPILE:-} != "$sdk_root/tool/compile-chain/bin/arm-linux-gnueabihf-" ||
+          ${CROSS_COMPILE:-} != "$sdk_root/system/tool/compile-chain/bin/arm-linux-gnueabihf-" ||
           ${OUT_DIR:-} != "$sdk_root/out" ]]; then
         echo "Error: source $script_dir/config.sh before running this script." >&2
         exit 1
@@ -32,7 +32,7 @@ check_environment() {
             exit 1
         fi
     done
-    test -d "$sdk_root/rootfs/rootfs"
+    test -d "$sdk_root/system/rootfs/rootfs"
     if [[ -L $OUT_DIR || ( -e $OUT_DIR && ! -d $OUT_DIR ) ]]; then
         echo "Error: out must be a regular directory inside the SDK." >&2
         exit 1
@@ -79,12 +79,12 @@ build_uboot() {
         return 0
     fi
     echo "[1/4] Building U-Boot"
-    "$sdk_root/uboot/build.sh"
-    cp -- "$sdk_root/uboot/u-boot.imx" "$firmware_dir/$uboot_name"
+    "$sdk_root/system/uboot/build.sh"
+    cp -- "$sdk_root/system/uboot/u-boot.imx" "$firmware_dir/$uboot_name"
 }
 
 build_kernel() {
-    local kernel_dir="$sdk_root/kernel"
+    local kernel_dir="$sdk_root/system/kernel"
     local targets=()
     if ! reuse_firmware zImage; then
         targets+=(zImage modules)
@@ -121,8 +121,8 @@ pack_rootfs() {
         return 0
     fi
     echo "[3/4] Packaging the existing rootfs"
-    "$sdk_root/rootfs/packet.sh" \
-        "$sdk_root/rootfs/rootfs" "$firmware_dir/$rootfs_name"
+    "$sdk_root/system/rootfs/packet.sh" \
+        "$sdk_root/system/rootfs/rootfs" "$firmware_dir/$rootfs_name"
 }
 
 publish_output() {

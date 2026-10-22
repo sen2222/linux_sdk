@@ -18,7 +18,7 @@ export PATH="$toolchain_dir/bin:$PATH"
 for tool in gcc as ld ar objcopy; do
     if ! "${cross_compile}${tool}" --version > /dev/null; then
         echo "Error: cannot run ${cross_compile}${tool}." >&2
-        echo "Check the toolchain in tool/compile-chain and its host runtime libraries." >&2
+        echo "Check the toolchain in system/tool/compile-chain and its host runtime libraries." >&2
         exit 1
     fi
 done

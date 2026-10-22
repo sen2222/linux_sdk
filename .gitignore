@@ -31,7 +31,6 @@ Module.markers
 # =================================
 # 项目特定目录
 # =================================
-/share/
 /tftp_share/
 /out/
 /build/.build-all.*/
@@ -77,11 +76,11 @@ cscope.*
 .idea/
 
 # Keep runtime rootfs files, including init.d scripts and prebuilt modules.
-!/rootfs/rootfs/**
+!/system/rootfs/rootfs/**
 
 # Keep the bundled toolchain's required prebuilt objects and libraries.
-!/tool/compile-chain/**
+!/system/tool/compile-chain/**
 
 # Old packaging outputs are not part of the rootfs template.
-/rootfs/rootfs/rootfs.tar.bz2
-/rootfs/rootfs/rootfs_nogpu.tar.bz2
+/system/rootfs/rootfs/rootfs.tar.bz2
+/system/rootfs/rootfs/rootfs_nogpu.tar.bz2

@@ -5,11 +5,11 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 sdk_root=$(cd -- "$script_dir/.." && pwd)
 
 clean_uboot() {
-    "$sdk_root/uboot/clean.sh"
+    "$sdk_root/system/uboot/clean.sh"
 }
 
 clean_kernel() {
-    "$sdk_root/kernel/clean.sh"
+    "$sdk_root/system/kernel/clean.sh"
 }
 
 clean_output() {
