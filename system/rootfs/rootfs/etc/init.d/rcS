@@ -13,6 +13,10 @@ mount_filesystems() {
 setup_devices() {
     echo /sbin/mdev > /proc/sys/kernel/hotplug
     mdev -s
+    # Keep the framebuffer display on when the console is idle.
+    if [ -c /dev/tty0 ]; then
+        printf '\033[9;0]' > /dev/tty0
+    fi
 }
 
 start_network() {

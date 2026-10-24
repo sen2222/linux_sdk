@@ -1,0 +1,12 @@
+--- a/src/image/lv_tjpgd.c
++++ b/src/image/lv_tjpgd.c
+@@ -265,6 +265,9 @@
+         decoded_area->y2 += my;
+     }
+ 
++    /* The draw loop calls again after the final MCU to detect completion. */
++    if(decoded_area->y1 >= jd->height) return LV_RESULT_INVALID;
++
+     if(decoded_area->x2 >= jd->width) decoded_area->x2 = jd->width - 1;
+     if(decoded_area->y2 >= jd->height) decoded_area->y2 = jd->height - 1;
+ 

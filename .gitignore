@@ -34,6 +34,10 @@ Module.markers
 /tftp_share/
 /out/
 /build/.build-all.*/
+/share/code/file_interaction/out/
+/share/code/kiva_project/build/
+/share/code/kiva_project/kiva_project
+/share/code/kiva_project/lib/lvgl/build/
 __pycache__/
 
 # =================================
