@@ -7,10 +7,13 @@
 
 
 #include "view_class.h"
+#include "status_bar.h"
+#include "refresh_demo.h"
 #include "app_config.h"
 
 #include "ds/ds_stack.h"
 #include "lvgl_port/lvgl_port.h"
+#include "camera/ov5640.h"
 
 struct _view_class
 {
@@ -28,7 +31,23 @@ struct _main_view_data
 static struct _view_class g_view_class = {0};
 
 
-
+static void app_main_btn_event_cb(lv_event_t *event)
+{
+    lv_event_code_t code = lv_event_get_code(event);
+    switch (code)
+    {
+        case LV_EVENT_PRESSED:
+        {
+            ov5640_led_on();
+        }break;
+        case LV_EVENT_RELEASED:
+        {
+            ov5640_led_off();
+        }break;
+        default:
+            break;
+    }
+}
 static int app_main_view_init(APP_VIEW_INFO_S *view_info)
 {
    
@@ -68,9 +87,15 @@ static int app_main_view_init(APP_VIEW_INFO_S *view_info)
     main_view_data->btn = lv_button_create(view_info->view_screen);
     lv_obj_set_size(main_view_data->btn, 160, 60);
     lv_obj_align(main_view_data->btn, LV_ALIGN_CENTER, 0, 40);
+    lv_obj_add_event_cb(main_view_data->btn, app_main_btn_event_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(main_view_data->btn, app_main_btn_event_cb, LV_EVENT_RELEASED, NULL);
+
     
 
     view_info->view_data = main_view_data;
+    /* 临时刷屏演示：默认启动，点击 EXIT DEMO 后回到主界面。 */
+    if (app_refresh_demo_create(view_info->view_screen) == NULL)
+        APP_LOG(LOG_WARN, "failed to create refresh demo\n");
     return 0;
 }
 static void app_main_view_deinit(APP_VIEW_INFO_S *view_info)
@@ -177,13 +202,10 @@ int app_view_init(void)
     g_view_class.main_view.view_deinit = app_main_view_deinit;
     g_view_class.main_view.view_data = NULL;
 
-    ret = app_switch_new_view(&g_view_class.main_view);
-    if (ret < 0)
-    {
-        APP_LOG(LOG_ERRO, "failed to switch to main view\n");
-        ds_stack_destroy(g_view_class.g_view_stack);
-        g_view_class.g_view_stack = NULL;
-        return -1;
-    }
+    lvgl_port_mutex_lock();
+    app_status_bar_init();
+    lvgl_port_mutex_unlock();
+    app_switch_new_view(&g_view_class.main_view);
+    
     return 0;
 }

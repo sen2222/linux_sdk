@@ -25,6 +25,7 @@ SOURCE_LIB_ROOT = lib
 # hw_drive模块定义
 MODULES_HW_DRIVE = \
     touch \
+	camera \
 
 
 # application模块定义
@@ -46,8 +47,15 @@ LIBS += -L$(LVGL_LIB_PATH)/lib \
 INCLUDEPATH_ALL += $(LVGL_LIB_PATH)/include
 CFLAGS += -DLV_CONF_INCLUDE_SIMPLE -DLV_KCONFIG_IGNORE
 
-
-
+# curl
+CURL_LIB_PATH = ${SOURCE_LIB_ROOT}/curl
+LIBS += -L$(CURL_LIB_PATH)/lib \
+        -lcurl \
+		-lmbedtls \
+		-lmbedx509 \
+		-lmbedcrypto \
+		-lz
+INCLUDEPATH_ALL += $(CURL_LIB_PATH)/include
 
 
 SOURCES_ALL = main.c $(wildcard $(SYSTEM_ROOT)/*.c $(HW_DRIVE_ROOT)/*.c $(APPLICATION_ROOT)/*.c)

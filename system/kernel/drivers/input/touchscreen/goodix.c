@@ -170,8 +170,9 @@ static int goodix_ts_read_input_report(struct goodix_ts_data *ts, u8 *data)
 			break;
 		usleep_range(1000, 2000);
 	} while (time_before(jiffies, timeout));
+	/* A not-ready timeout must not be reported as all fingers released. */
 	if (!(data[0] & BIT(7)))
-		return 0;
+		return -ENOMSG;
 
 	touch_num = data[0] & 0x0f;
 	if (touch_num > ts->max_touch_num)

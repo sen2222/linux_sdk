@@ -8,12 +8,14 @@
 #include "lvgl_port/lvgl_port.h"
 
 #include "app_view/view_class.h"
+#include "camera/ov5640.h"
 
 
 int main(int argc, char *argv[])
 {
     
     lvgl_port_init();
+    ov5640_init();
     app_view_init();
 
     while (1) {

@@ -9,6 +9,7 @@
 
 #include "lvgl/lvgl.h"
 #include "lvgl_port.h"
+#include "lvgl_fbdev.h"
 
 #include "app_config.h"
 #include "touch/touch_input.h"
@@ -71,21 +72,26 @@ void lvgl_port_mutex_unlock(void)
 
 int lvgl_port_init(void)
 {
-    int ret;
     lv_display_t *display;
     lv_indev_t  *input;
 
     lv_init();
-    display = lv_linux_fbdev_create();
-    if(!display) 
+    /* 默认先尝试自定义显示链路：双画布 -> PxP/CPU 拷贝 -> 双显存页 VSYNC 翻页。 */
+    display = kiva_fbdev_create(LVGL_PORT_FBDEV_PATH);
+    if (display == NULL)
+    {
+        /* 格式/设备不支持，或设置了 KIVA_FB_MODE=legacy 时，使用原版 fbdev。 */
+        APP_LOG(LOG_WARN, "using legacy LVGL fbdev presenter\n");
+        display = lv_linux_fbdev_create();
+        if (display != NULL && lv_linux_fbdev_set_file(display, LVGL_PORT_FBDEV_PATH) != LV_RESULT_OK)
+        {
+            lv_display_delete(display);
+            display = NULL;
+        }
+    }
+    if(!display)
     {
         APP_LOG(LOG_ERRO, "Cannot initialize framebuffer\n");
-        goto LVGL_PROT_INIT_ERRO;
-    }
-    ret = lv_linux_fbdev_set_file(display, LVGL_PORT_FBDEV_PATH);
-    if(ret != LV_RESULT_OK)
-    {
-        APP_LOG(LOG_ERRO, "Cannot set fbdev path file\n");
         goto LVGL_PROT_INIT_ERRO;
     }
     APP_LOG(LOG_INFO, "fbdev init success\n");

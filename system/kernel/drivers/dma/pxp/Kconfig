@@ -11,8 +11,9 @@ config MXC_PXP_V3
 	depends on ARM
 	select DMA_ENGINE
 	help
-	  Support the PxP V3(Pixel Pipeline) on i.MX7D. The PxP V3 supports
-	  more functions than PxP V2, dithering, reagl/-D and etc.
+	  Support the PxP V3/V3P(Pixel Pipeline) on i.MX7D and i.MX6ULL.
+	  The PxP V3 supports more functions than PxP V2, dithering,
+	  reagl/-D and etc.
 	  If unsure, select N.
 
 config MXC_PXP_CLIENT_DEVICE
