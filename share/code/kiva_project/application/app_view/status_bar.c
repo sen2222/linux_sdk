@@ -21,11 +21,11 @@ static void app_status_bar_update_time(lv_timer_t *timer)
 {
     time_t now = time(NULL);
     struct tm local_time;
-    char text[6] = "--:--";
+    char text[16] = "-- -- --:--";
     (void)timer;
 
     if (now != (time_t)-1 && localtime_r(&now, &local_time) != NULL)
-        strftime(text, sizeof(text), "%H:%M", &local_time);
+        strftime(text, sizeof(text), "%m-%d %H:%M", &local_time);
 
     if (strcmp(lv_label_get_text(g_status_bar.time_label), text) != 0)
         lv_label_set_text(g_status_bar.time_label, text);
@@ -87,7 +87,7 @@ int app_status_bar_init(void)
     lv_obj_set_style_text_outline_stroke_color(g_status_bar.time_label, lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_text_outline_stroke_width(g_status_bar.time_label, 1, LV_PART_MAIN);
     lv_obj_set_style_text_outline_stroke_opa(g_status_bar.time_label, LV_OPA_50, LV_PART_MAIN);
-    lv_obj_align(g_status_bar.time_label, LV_ALIGN_LEFT_MID, 16, 0);
+    lv_obj_align(g_status_bar.time_label, LV_ALIGN_RIGHT_MID, -16, 0);
 
     app_status_bar_update_time(NULL);
     g_status_bar.timer = lv_timer_create(app_status_bar_update_time, 1000, NULL);
@@ -104,4 +104,10 @@ void app_status_bar_deinit(void)
 {
     if (g_status_bar.bar != NULL)
         lv_obj_delete(g_status_bar.bar);
+}
+
+void app_status_bar_set_visible(int visible)
+{
+    if (g_status_bar.bar != NULL)
+        lv_obj_set_hidden(g_status_bar.bar, !visible);
 }

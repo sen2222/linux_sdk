@@ -659,6 +659,12 @@ int board_phy_config(struct phy_device *phydev)
 #endif
 
 #ifdef CONFIG_VIDEO_MXS
+int board_cfb_skip(void)
+{
+	/* Keep the full-screen logo visible; use the serial console for text. */
+	return 1;
+}
+
 static iomux_v3_cfg_t const lcd_pads[] = {
 	MX6_PAD_LCD_CLK__LCDIF_CLK | MUX_PAD_CTRL(LCD_PAD_CTRL),
 	MX6_PAD_LCD_ENABLE__LCDIF_ENABLE | MUX_PAD_CTRL(LCD_PAD_CTRL),

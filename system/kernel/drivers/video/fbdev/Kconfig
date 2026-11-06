@@ -2414,6 +2414,14 @@ config FB_MXS
 	help
 	  Framebuffer support for the MXS SoC.
 
+config FB_MXS_BOOT_LOGO
+	bool "Show a full-screen boot logo on the MXS LCD"
+	depends on FB_MXS=y && LOGO && !FRAMEBUFFER_CONSOLE
+	select LOGO_LINUX_CLUT224
+	help
+	  Draw the built-in logo when the LCD framebuffer is ready, without
+	  attaching a text console. Serial console output is unaffected.
+
 config FB_PUV3_UNIGFX
 	tristate "PKUnity v3 Unigfx framebuffer support"
 	depends on FB && UNICORE32 && ARCH_PUV3

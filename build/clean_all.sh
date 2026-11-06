@@ -13,7 +13,10 @@ clean_kernel() {
 }
 
 clean_output() {
-    rm -rf -- "$sdk_root/out" "$script_dir"/.build-all.*
+    if [[ -d "${sdk_root}/out" && ! -L "${sdk_root}/out" ]]; then
+        find "${sdk_root}/out" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + || return 1
+    fi
+    rm -rf -- "${script_dir}"/.build-all.*
 }
 
 main() {
@@ -28,7 +31,7 @@ main() {
         echo "Error: some cleanup steps failed; check the messages above." >&2
         exit 1
     fi
-    echo "Cleanup complete: U-Boot and kernel build outputs and the out directory."
+    echo "Cleanup complete: U-Boot and kernel build outputs and the contents of out."
 }
 
 main "$@"

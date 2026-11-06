@@ -1,211 +1,201 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "lvgl/lvgl.h"
-
-
+#include "app_config.h"
 #include "view_class.h"
 #include "status_bar.h"
 #include "refresh_demo.h"
-#include "app_config.h"
-
-#include "ds/ds_stack.h"
+#include "camera_view.h"
+#include "gallery_view.h"
 #include "lvgl_port/lvgl_port.h"
-#include "camera/ov5640.h"
-
-struct _view_class
-{
-    APP_VIEW_INFO_S             main_view;
-    DS_STACK_S                  *g_view_stack;
-};
 
 struct _main_view_data
 {
-    lv_obj_t    *label;
-    lv_obj_t    *btn;
+    lv_obj_t *screen;
+    lv_obj_t *apps;
+    lv_obj_t *active_view;
 };
 
-
-static struct _view_class g_view_class = {0};
-
-
-static void app_main_btn_event_cb(lv_event_t *event)
+struct _main_app
 {
-    lv_event_code_t code = lv_event_get_code(event);
-    switch (code)
-    {
-        case LV_EVENT_PRESSED:
-        {
-            ov5640_led_on();
-        }break;
-        case LV_EVENT_RELEASED:
-        {
-            ov5640_led_off();
-        }break;
-        default:
-            break;
-    }
+    const char *name;
+    const char *symbol;
+    uint32_t color;
+    lv_obj_t *(*create)(lv_obj_t *parent);
+};
+
+#define MAIN_VIEW_APPS_PER_ROW 5
+
+static struct _main_view_data *g_main_view = NULL;
+
+static void app_main_child_delete_cb(lv_event_t *event)
+{
+    struct _main_view_data *main_view_data = lv_event_get_user_data(event);
+    main_view_data->active_view = NULL;
 }
-static int app_main_view_init(APP_VIEW_INFO_S *view_info)
+
+static void app_main_delete_cb(lv_event_t *event)
 {
-   
-    if(view_info == NULL)
-    {
-        APP_LOG(LOG_ERRO, "view data is NULL\n");
-        return -1;
-    }
-    view_info->view_screen = lv_obj_create(NULL);
-    if (view_info->view_screen == NULL)
-    {
-        APP_LOG(LOG_ERRO, "failed to create main view screen\n");
-        return -1;
-    }
-
-    struct _main_view_data *main_view_data = malloc(sizeof(struct _main_view_data));
-    if (main_view_data == NULL)
-    {
-        APP_LOG(LOG_ERRO, "failed to allocate main view data\n");
-        return -1;
-    }
-    memset(main_view_data, 0, sizeof(struct _main_view_data));
-
-
-    /* 设置主界面壁纸 */
-    lv_obj_set_style_bg_image_src(
-        view_info->view_screen,
-        "L:res/main_view_img.jpg",
-        LV_PART_MAIN);
-
-    /* 创建标题 */
-    main_view_data->label = lv_label_create(view_info->view_screen);
-    lv_label_set_text(main_view_data->label, "KIVA MAIN VIEW");
-    lv_obj_align(main_view_data->label, LV_ALIGN_CENTER, 0, -60);
-
-    /* 创建按钮 */
-    main_view_data->btn = lv_button_create(view_info->view_screen);
-    lv_obj_set_size(main_view_data->btn, 160, 60);
-    lv_obj_align(main_view_data->btn, LV_ALIGN_CENTER, 0, 40);
-    lv_obj_add_event_cb(main_view_data->btn, app_main_btn_event_cb, LV_EVENT_PRESSED, NULL);
-    lv_obj_add_event_cb(main_view_data->btn, app_main_btn_event_cb, LV_EVENT_RELEASED, NULL);
-
-    
-
-    view_info->view_data = main_view_data;
-    /* 临时刷屏演示：默认启动，点击 EXIT DEMO 后回到主界面。 */
-    if (app_refresh_demo_create(view_info->view_screen) == NULL)
-        APP_LOG(LOG_WARN, "failed to create refresh demo\n");
-    return 0;
+    struct _main_view_data *main_view_data = lv_event_get_user_data(event);
+    /* 父页面先收到DELETE，子页面随后销毁，先撤掉引用父数据的回调。 */
+    if (main_view_data->active_view != NULL)
+        lv_obj_remove_event_cb_with_user_data(main_view_data->active_view, app_main_child_delete_cb, main_view_data);
+    if (g_main_view == main_view_data)
+        g_main_view = NULL;
+    free(main_view_data);
 }
-static void app_main_view_deinit(APP_VIEW_INFO_S *view_info)
+
+static void app_main_open_event_cb(lv_event_t *event)
 {
-    struct _main_view_data *main_view_data = (struct _main_view_data *)view_info->view_data;
-    if (main_view_data == NULL)
+    struct _main_view_data *main_view_data = lv_event_get_user_data(event);
+    const struct _main_app *app = lv_obj_get_user_data(lv_event_get_current_target_obj(event));
+    if (main_view_data->active_view != NULL)
+        return;
+    /* LVGL回调中直接创建子页面，删除子页面就是返回，无需另维护一份界面栈。 */
+    main_view_data->active_view = app->create(main_view_data->screen);
+    if (main_view_data->active_view == NULL)
     {
-        APP_LOG(LOG_ERRO, "main view data is NULL\n");
+        APP_LOG(LOG_ERRO, "failed to open %s\n", app->name);
         return;
     }
-    lv_obj_del(view_info->view_screen);
-    free(main_view_data);
-    view_info->view_data = NULL;
+    lv_obj_add_event_cb(main_view_data->active_view, app_main_child_delete_cb, LV_EVENT_DELETE, main_view_data);
 }
 
-
-int app_switch_new_view(APP_VIEW_INFO_S *view_info)
+static int app_main_create_icon(struct _main_view_data *main_view_data, const struct _main_app *app, unsigned index)
 {
-    int ret = 0;
-    APP_VIEW_INFO_S *top_view_data = NULL;
-    if (view_info == NULL || view_info->view_init == NULL || view_info->view_deinit == NULL)
-    {
-        APP_LOG(LOG_ERRO, "view info is NULL || view_init or view_deinit is NULL\n");
+    lv_obj_t *button, *icon, *label;
+    button = lv_button_create(main_view_data->apps);
+    if (button == NULL)
         return -1;
-    }
-    top_view_data = (APP_VIEW_INFO_S *)ds_stack_top(g_view_class.g_view_stack);         // 先取栈顶界面
-    if(top_view_data == view_info)                                                      // 如果是同一个界面，直接返回
-    {
-        APP_LOG(LOG_WARN,"already in the same view\n");
-        return 0;
-    }
+    lv_obj_remove_style_all(button);
+    /* 每个应用占一行的1/5；新增应用只需要在应用表后继续添加。 */
+    lv_obj_set_size(button, LV_PCT(100 / MAIN_VIEW_APPS_PER_ROW), 136);
+    lv_obj_set_pos(button, LV_PCT((int32_t)(index % MAIN_VIEW_APPS_PER_ROW) * 100 / MAIN_VIEW_APPS_PER_ROW),
+                   index / MAIN_VIEW_APPS_PER_ROW * 156);
+    lv_obj_set_scrollable(button, false);
+    lv_obj_set_press_lock(button, false);
+    lv_obj_set_style_radius(button, 16, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(button, lv_color_white(), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(button, LV_OPA_20, LV_STATE_PRESSED);
+    lv_obj_set_user_data(button, (void *)app);
+    lv_obj_add_event_cb(button, app_main_open_event_cb, LV_EVENT_CLICKED, main_view_data);
 
-    lvgl_port_mutex_lock();
-    ret = view_info->view_init(view_info);
-    if (ret < 0)
-    {
-        APP_LOG(LOG_ERRO, "failed to initialize view data\n");
-        lvgl_port_mutex_unlock();
+    icon = lv_obj_create(button);
+    if (icon == NULL)
         return -1;
-    }
-    ds_stack_push(g_view_class.g_view_stack, (void *)view_info);  
-    lv_screen_load(view_info->view_screen);
-    if (top_view_data != NULL)
-        top_view_data->view_deinit(top_view_data);
-    lvgl_port_mutex_unlock();
+    lv_obj_remove_style_all(icon);
+    lv_obj_set_size(icon, 84, 84);
+    lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 4);
+    lv_obj_set_style_radius(icon, 20, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(icon, lv_color_hex(app->color), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(icon, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_clickable(icon, false);
+    lv_obj_set_scrollable(icon, false);
 
-    return 0;
-    
-}
-
-int app_back_old_view(void)
-{
-    int ret = 0;
-    APP_VIEW_INFO_S *old_view_data = NULL, *new_view_data = NULL;
-
-    // 先取栈顶界面反初始化
-    old_view_data = (APP_VIEW_INFO_S *)ds_stack_top(g_view_class.g_view_stack);
-    if(old_view_data == NULL)
-    {
-        APP_LOG(LOG_ERRO, "failed to pop view data from stack\n");
+    label = lv_label_create(icon);
+    if (label == NULL)
         return -1;
-    }else if(old_view_data == &g_view_class.main_view)                                  // 如果是主界面，直接返回
-    {
-        APP_LOG(LOG_WARN,"already in main view\n");
-        return 0;
-    }
-    old_view_data = (APP_VIEW_INFO_S *)ds_stack_pop(g_view_class.g_view_stack);             // 先出栈顶的旧界面
-    new_view_data = (APP_VIEW_INFO_S *)ds_stack_top(g_view_class.g_view_stack);             // 再取栈顶的新界面
+    lv_label_set_text(label, app->symbol);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_center(label);
 
-    lvgl_port_mutex_lock();
-    ret = new_view_data->view_init(new_view_data);                                          // 再初始化
-    if(ret < 0)
-    {
-        APP_LOG(LOG_ERRO, "failed to initialize view data\n");
-        ds_stack_push(g_view_class.g_view_stack, old_view_data);
-        lvgl_port_mutex_unlock();
+    label = lv_label_create(button);
+    if (label == NULL)
         return -1;
-    }
-    lv_screen_load(new_view_data->view_screen);
-    old_view_data->view_deinit(old_view_data);
-    lvgl_port_mutex_unlock();
+    lv_label_set_text(label, app->name);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -10);
     return 0;
 }
 
-
+static int app_main_view_init(void)
+{
+    static const struct _main_app apps[] = {
+        {"TEST", LV_SYMBOL_LIST, 0x287be8, app_refresh_demo_create},
+        {"CAMERA", LV_SYMBOL_VIDEO, 0xe59a30, app_camera_view_create},
+        {"GALLERY", LV_SYMBOL_IMAGE, 0x38966e, app_gallery_view_create},
+    };
+    struct _main_view_data *main_view_data = calloc(1, sizeof(*main_view_data));
+    if (main_view_data == NULL)
+        return -1;
+    main_view_data->screen = lv_obj_create(NULL);
+    if (main_view_data->screen == NULL)
+    {
+        free(main_view_data);
+        return -1;
+    }
+    lv_obj_add_event_cb(main_view_data->screen, app_main_delete_cb, LV_EVENT_DELETE, main_view_data);
+    lv_obj_set_style_pad_all(main_view_data->screen, 0, LV_PART_MAIN);
+    lv_obj_set_scrollable(main_view_data->screen, false);
+    lv_obj_set_style_bg_image_src(main_view_data->screen, "L:res/main_view_img.jpg", LV_PART_MAIN);
+    main_view_data->apps = lv_obj_create(main_view_data->screen);
+    if (main_view_data->apps == NULL)
+        goto MAIN_VIEW_ERRO;
+    lv_obj_remove_style_all(main_view_data->apps);
+    lv_obj_set_size(main_view_data->apps, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_pad_all(main_view_data->apps, 24, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(main_view_data->apps, 64, LV_PART_MAIN);
+    lv_obj_set_scroll_dir(main_view_data->apps, LV_DIR_VER);
+    lv_obj_set_clickable(main_view_data->apps, false);
+    for (unsigned i = 0; i < sizeof(apps) / sizeof(apps[0]); i++)
+    {
+        if (app_main_create_icon(main_view_data, &apps[i], i) < 0)
+            goto MAIN_VIEW_ERRO;
+    }
+    g_main_view = main_view_data;
+    lv_screen_load(main_view_data->screen);
+    return 0;
+MAIN_VIEW_ERRO:
+    lv_obj_delete(main_view_data->screen);
+    return -1;
+}
 
 int app_view_init(void)
 {
-    if (g_view_class.g_view_stack != NULL)
-    {
-        APP_LOG(LOG_ERRO, "view stack already initialized\n");
-        return -1;
-    }
-
-    int ret = 0;
-    g_view_class.g_view_stack = ds_stack_create();
-    if(g_view_class.g_view_stack == NULL)
-    {
-        APP_LOG(LOG_ERRO, "failed to create view stack\n");
-        return -1;
-    }
-    // 进入主界面
-    g_view_class.main_view.view_init = app_main_view_init;
-    g_view_class.main_view.view_deinit = app_main_view_deinit;
-    g_view_class.main_view.view_data = NULL;
-
+    int ret;
     lvgl_port_mutex_lock();
-    app_status_bar_init();
+    if (g_main_view != NULL)
+    {
+        lvgl_port_mutex_unlock();
+        return 0;
+    }
+    ret = app_status_bar_init();
+    if (ret == 0)
+        ret = app_main_view_init();
+    if (ret < 0)
+        app_status_bar_deinit();
     lvgl_port_mutex_unlock();
-    app_switch_new_view(&g_view_class.main_view);
-    
-    return 0;
+    return ret;
+}
+
+lv_obj_t *app_view_back_button_create(lv_obj_t *parent, lv_event_cb_t callback, void *user_data)
+{
+    lv_obj_t *button = lv_button_create(parent);
+    lv_obj_t *label;
+    if (button == NULL)
+        return NULL;
+    lv_obj_remove_style_all(button);
+    lv_obj_set_size(button, 44, 36);
+    lv_obj_set_pos(button, 8, 40);
+    lv_obj_set_scrollable(button, false);
+    lv_obj_set_style_radius(button, 18, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(button, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(button, LV_OPA_20, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(button, LV_OPA_50, LV_STATE_PRESSED);
+    lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, user_data);
+    label = lv_label_create(button);
+    if (label == NULL)
+    {
+        lv_obj_delete(button);
+        return NULL;
+    }
+    lv_label_set_text(label, "<");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
+    lv_obj_center(label);
+    return button;
 }

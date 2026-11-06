@@ -33,3 +33,9 @@ main() {
 }
 
 main
+
+
+./share/app_init.sh &
+
+
+

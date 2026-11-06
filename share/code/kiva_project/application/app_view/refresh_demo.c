@@ -2,17 +2,20 @@
 #include "lvgl/lvgl.h"
 #include "app_config.h"
 #include "refresh_demo.h"
+#include "view_class.h"
 
 struct _refresh_demo
 {
     lv_obj_t *root;
     lv_obj_t *fps_label;
+    lv_obj_t *touch_label;
     lv_obj_t *blocks[3];
     lv_display_t *display;
     lv_timer_t *timer;
     uint32_t started;
     uint32_t sampled;
     unsigned frames;
+    uint8_t closing;
 };
 
 /* 只统计一帧最后一次 flush 返回的次数，不把 16ms 动画定时器次数当成实际 FPS。 */
@@ -35,8 +38,30 @@ static void app_refresh_demo_delete_cb(lv_event_t *event)
 static void app_refresh_demo_exit_cb(lv_event_t *event)
 {
     struct _refresh_demo *demo = lv_event_get_user_data(event);
+    if (demo->closing)
+        return;
+    demo->closing = 1;
     /* 按钮在 root 内部，延后删除整个 demo，避免打断当前按钮事件分发。 */
     lv_obj_delete_async(demo->root);
+}
+
+static void app_refresh_demo_touch_cb(lv_event_t *event)
+{
+    struct _refresh_demo *demo = lv_event_get_user_data(event);
+    lv_event_code_t code = lv_event_get_code(event);
+    lv_indev_t *indev;
+    lv_point_t point;
+    int pressed;
+    if (code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING &&
+        code != LV_EVENT_RELEASED && code != LV_EVENT_PRESS_LOST)
+        return;
+    indev = lv_event_get_indev(event);
+    if (indev == NULL || lv_indev_get_type(indev) != LV_INDEV_TYPE_POINTER)
+        return;
+    lv_indev_get_point(indev, &point);
+    pressed = code == LV_EVENT_PRESSED || code == LV_EVENT_PRESSING;
+    lv_label_set_text_fmt(demo->touch_label, "TOUCH: %s   X: %d   Y: %d",
+                          pressed ? "DOWN" : "UP", (int)point.x, (int)point.y);
 }
 
 static void app_refresh_demo_timer_cb(lv_timer_t *timer)
@@ -63,7 +88,7 @@ static void app_refresh_demo_timer_cb(lv_timer_t *timer)
         demo->frames = 0;
         demo->sampled = lv_tick_get();
     }
-    /* 强制整屏重绘，用于比较完整绘制、DMA/CPU 搬运和 VSYNC 呈现，不只移动几块脏区域。 */
+    /* 强制整屏重绘，用于观察完整绘制和VSYNC呈现，不只移动几块脏区域。 */
     lv_obj_invalidate(demo->root);
 }
 
@@ -71,7 +96,7 @@ lv_obj_t *app_refresh_demo_create(lv_obj_t *parent)
 {
     static const uint32_t colors[3] = {0x27d9ff, 0xff936a, 0xa58bff};
     struct _refresh_demo *demo;
-    lv_obj_t *label, *button;
+    lv_obj_t *label;
     unsigned i;
     if (parent == NULL)
         return NULL;
@@ -90,6 +115,9 @@ lv_obj_t *app_refresh_demo_create(lv_obj_t *parent)
     lv_obj_set_size(demo->root, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(demo->root, 0, 0);
     lv_obj_set_scrollable(demo->root, false);
+    lv_obj_set_clickable(demo->root, true);
+    lv_obj_set_press_lock(demo->root, true);
+    lv_obj_add_event_cb(demo->root, app_refresh_demo_touch_cb, LV_EVENT_ALL, demo);
     lv_obj_set_style_bg_color(demo->root, lv_color_hex(0x0b1020), LV_PART_MAIN);
     /* 覆盖主界面的 JPG 壁纸，让本 demo 的结果不受重复图片解码影响；退出后壁纸恢复。 */
     lv_obj_set_style_bg_opa(demo->root, LV_OPA_COVER, LV_PART_MAIN);
@@ -97,15 +125,15 @@ lv_obj_t *app_refresh_demo_create(lv_obj_t *parent)
     label = lv_label_create(demo->root);
     if (label == NULL)
         goto failed;
-    lv_label_set_text(label, "KIVA REFRESH DEMO");
+    lv_label_set_text(label, "TEST / LCD + TOUCH");
     lv_obj_set_style_text_font(label, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
-    lv_obj_set_pos(label, 24, 56);
+    lv_obj_set_pos(label, 76, 56);
 
     label = lv_label_create(demo->root);
     if (label == NULL)
         goto failed;
-    lv_label_set_text(label, "Continuous full-screen refresh");
+    lv_label_set_text(label, "Drag on the screen to test touch");
     lv_obj_set_style_text_color(label, lv_color_hex(0x96a4bd), LV_PART_MAIN);
     lv_obj_set_pos(label, 24, 88);
 
@@ -116,6 +144,14 @@ lv_obj_t *app_refresh_demo_create(lv_obj_t *parent)
     lv_obj_set_style_text_font(demo->fps_label, &lv_font_montserrat_20, LV_PART_MAIN);
     lv_obj_set_style_text_color(demo->fps_label, lv_color_hex(0x27d9ff), LV_PART_MAIN);
     lv_obj_align(demo->fps_label, LV_ALIGN_TOP_RIGHT, -24, 56);
+
+    demo->touch_label = lv_label_create(demo->root);
+    if (demo->touch_label == NULL)
+        goto failed;
+    lv_label_set_text(demo->touch_label, "TOUCH: --   X: --   Y: --");
+    lv_obj_set_style_text_font(demo->touch_label, &lv_font_montserrat_20, LV_PART_MAIN);
+    lv_obj_set_style_text_color(demo->touch_label, lv_color_hex(0x55ff99), LV_PART_MAIN);
+    lv_obj_align(demo->touch_label, LV_ALIGN_BOTTOM_LEFT, 24, -30);
 
     for (i = 0; i < 3; i++)
     {
@@ -140,17 +176,8 @@ lv_obj_t *app_refresh_demo_create(lv_obj_t *parent)
         lv_obj_set_clickable(demo->blocks[i], false);
         lv_obj_set_scrollable(demo->blocks[i], false);
     }
-    button = lv_button_create(demo->root);
-    if (button == NULL)
+    if (app_view_back_button_create(demo->root, app_refresh_demo_exit_cb, demo) == NULL)
         goto failed;
-    lv_obj_set_size(button, 140, 44);
-    lv_obj_align(button, LV_ALIGN_BOTTOM_RIGHT, -24, -20);
-    lv_obj_add_event_cb(button, app_refresh_demo_exit_cb, LV_EVENT_CLICKED, demo);
-    label = lv_label_create(button);
-    if (label == NULL)
-        goto failed;
-    lv_label_set_text(label, "EXIT DEMO");
-    lv_obj_center(label);
 
     if (lv_display_add_event_cb(demo->display, app_refresh_demo_frame_cb, LV_EVENT_FLUSH_FINISH, demo) == NULL)
         goto failed;
@@ -158,7 +185,7 @@ lv_obj_t *app_refresh_demo_create(lv_obj_t *parent)
     demo->timer = lv_timer_create(app_refresh_demo_timer_cb, 16, demo);
     if (demo->timer == NULL)
         goto failed;
-    APP_LOG(LOG_INFO, "refresh demo started: continuous full-frame redraw, tap EXIT DEMO to stop\n");
+    APP_LOG(LOG_INFO, "TEST started: LCD full-frame refresh + touch coordinates, tap < to exit\n");
     return demo->root;
 failed:
     lv_obj_delete(demo->root);

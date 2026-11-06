@@ -32,6 +32,8 @@ for tool in gcc as ld ar objcopy; do
 done
 lzop --version > /dev/null
 
+python3 "${script_dir}/../../build/prepare_boot_logo.py"
+
 cd -- "$script_dir"
 echo "Kernel configuration: imx_sen_emmc_defconfig; parallel jobs: $jobs"
 make ARCH=arm CROSS_COMPILE="$cross_compile" distclean

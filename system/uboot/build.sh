@@ -14,6 +14,9 @@ fi
 
 export PATH="$toolchain_dir/bin:$PATH"
 
+# Prepare the fixed full-screen logo before changing build outputs.
+python3 "${script_dir}/../../build/prepare_boot_logo.py"
+
 # Check the toolchain and its host libraries before cleaning the source tree.
 for tool in gcc as ld ar objcopy; do
     if ! "${cross_compile}${tool}" --version > /dev/null; then

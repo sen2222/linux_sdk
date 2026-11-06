@@ -918,6 +918,8 @@ static int mxsfb_pan_display(struct fb_var_screeninfo *var,
 	int ret = 0;
 	struct mxsfb_info *host = fb_info->par;
 	unsigned offset;
+	unsigned target;
+	unsigned long deadline, remaining;
 
 	if (host->cur_blank != FB_BLANK_UNBLANK) {
 		dev_dbg(fb_info->device, "can't do pan display when fb "
@@ -935,25 +937,43 @@ static int mxsfb_pan_display(struct fb_var_screeninfo *var,
 		return -EINVAL;
 	}
 
+	/* 清除旧帧的中断状态，避免上一次帧结束被当成本次翻页完成。 */
+	writel(CTRL1_CUR_FRAME_DONE_IRQ_EN,
+		host->base + LCDC_CTRL1 + REG_CLR);
 	init_completion(&host->flip_complete);
+	writel(CTRL1_CUR_FRAME_DONE_IRQ,
+		host->base + LCDC_CTRL1 + REG_CLR);
 
 	offset = fb_info->fix.line_length * var->yoffset;
+	target = fb_info->fix.smem_start + offset;
 
 	/* update on next VSYNC */
-	writel(fb_info->fix.smem_start + offset,
+	writel(target,
 			host->base + host->devdata->next_buf);
 
 	writel(CTRL1_CUR_FRAME_DONE_IRQ_EN,
 		host->base + LCDC_CTRL1 + REG_SET);
 
-	ret = wait_for_completion_timeout(&host->flip_complete, HZ / 2);
-	if (!ret) {
-		dev_err(fb_info->device,
-			"mxs wait for pan flip timeout\n");
-		return -ETIMEDOUT;
-	}
-
-	return 0;
+	deadline = jiffies + HZ / 2;
+	remaining = HZ / 2;
+	do {
+		ret = wait_for_completion_timeout(&host->flip_complete, remaining);
+		/* 只有LCD已扫描新页，用户态才能复用旧页；单有中断并不足够。 */
+		if (readl(host->base + host->devdata->cur_buf) == target)
+			return 0;
+		if (!ret)
+			break;
+		remaining = deadline - jiffies;
+		if ((long)remaining <= 0)
+			break;
+		init_completion(&host->flip_complete);
+		writel(CTRL1_CUR_FRAME_DONE_IRQ_EN,
+			host->base + LCDC_CTRL1 + REG_SET);
+	} while (remaining);
+	writel(CTRL1_CUR_FRAME_DONE_IRQ_EN,
+		host->base + LCDC_CTRL1 + REG_CLR);
+	dev_err(fb_info->device, "mxs wait for pan flip timeout\n");
+	return -ETIMEDOUT;
 }
 
 static int mxsfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
@@ -1047,6 +1067,10 @@ static int mxsfb_restore_mode(struct mxsfb_info *host)
 		return -EINVAL;
 	}
 
+	/* 仅复用与设备树一致的布局，失败时不能留下被修改的像素格式或行跨度。 */
+	if (vmode.xres != fb_info->var.xres || vmode.yres != fb_info->var.yres ||
+	    (unsigned)bits_per_pixel != fb_info->var.bits_per_pixel)
+		return -EINVAL;
 	fb_info->var.bits_per_pixel = bits_per_pixel;
 
 	vmode.pixclock = KHZ2PICOS(clk_get_rate(host->clk_pix) / 1000U);
@@ -1248,7 +1272,8 @@ static int mxsfb_init_fbinfo(struct mxsfb_info *host)
 
 	fb_info->fix.line_length =
 		fb_info->var.xres * (fb_info->var.bits_per_pixel >> 3);
-	fb_info->fix.smem_len = SZ_32M;
+	/* Reserve two scanout pages for the current mode, rounded to whole pages. */
+	fb_info->fix.smem_len = PAGE_ALIGN(fb_info->fix.line_length * var->yres * 2);
 
 	/* Memory allocation for framebuffer */
 	if (mxsfb_map_videomem(fb_info) < 0)
@@ -1483,6 +1508,12 @@ static int mxsfb_probe(struct platform_device *pdev)
 			goto fb_pm_runtime_disable;
 		}
 	}
+
+	/* 全屏开机图直接绘入显存，不让fbcon为Logo预留文字行或启动光标。 */
+#ifdef CONFIG_FB_MXS_BOOT_LOGO
+	if (fb_prepare_logo(fb_info, FB_ROTATE_UR) > 0)
+		fb_show_logo(fb_info, FB_ROTATE_UR);
+#endif
 
 	if (!host->enabled) {
 		writel(0, host->base + LCDC_CTRL);

@@ -31,7 +31,7 @@ typedef struct {
 } TOUCH_INPUT_S;
 
 
-int lvgl_port_touch_init(TOUCH_INPUT_S *touch, int width, int height);
+int touch_init(TOUCH_INPUT_S *touch, int width, int height);
 int touch_input_read(TOUCH_INPUT_S *touch, int fd);
 
 #endif

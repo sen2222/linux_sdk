@@ -1,4 +1,4 @@
-TARGET = kiva_project
+TARGET = kiva_project_app
 BUILD_DIR = build
 
 CROSS_COMPILE = $(abspath ../../../system/tool/compile-chain/bin/arm-linux-gnueabihf-)
@@ -25,6 +25,7 @@ SOURCE_LIB_ROOT = lib
 # hw_drive模块定义
 MODULES_HW_DRIVE = \
     touch \
+	screen \
 	camera \
 
 
@@ -33,6 +34,7 @@ MODULES_APPLICATION = \
     lvgl_port \
 	app_view \
 	ds \
+	tool \
   
 
 LIBS =

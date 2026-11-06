@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 
-#define LVGL_PORT_FBDEV_PATH                    "/dev/fb0"
 
 
 

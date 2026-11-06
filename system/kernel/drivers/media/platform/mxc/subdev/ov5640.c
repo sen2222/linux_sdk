@@ -46,6 +46,9 @@
 #define OV5640_CHIP_ID_HIGH_BYTE        0x300A
 #define OV5640_CHIP_ID_LOW_BYTE         0x300B
 
+#define OV5640_REG_TIMING_TC_REG20      0x3820
+#define OV5640_VFLIP_MASK               0x06
+
 enum ov5640_mode {
 	ov5640_mode_MIN = 0,
 	ov5640_mode_VGA_640_480 = 0,
@@ -107,6 +110,7 @@ struct ov5640 {
 	int green;
 	int blue;
 	int ae_mode;
+	bool vflip;
 
 	u32 mclk;
 	u8 mclk_source;
@@ -615,6 +619,7 @@ static struct i2c_driver ov5640_i2c_driver = {
 
 static const struct ov5640_datafmt ov5640_colour_fmts[] = {
 	{MEDIA_BUS_FMT_YUYV8_2X8, V4L2_COLORSPACE_JPEG},
+	{MEDIA_BUS_FMT_RGB565_2X8_LE, V4L2_COLORSPACE_SRGB},
 };
 
 static struct ov5640 *to_ov5640(const struct i2c_client *client)
@@ -760,6 +765,30 @@ static s32 ov5640_write_reg(u16 reg, u8 val)
 	return 0;
 }
 
+static int ov5640_set_datafmt(const struct ov5640_datafmt *fmt)
+{
+	u8 format, mux;
+	int ret;
+
+	switch (fmt->code) {
+	case MEDIA_BUS_FMT_RGB565_2X8_LE:
+		/* Low byte first: matches V4L2 RGB565 and the little-endian LCD. */
+		format = 0x6f;
+		mux = 0x01;
+		break;
+	case MEDIA_BUS_FMT_YUYV8_2X8:
+		format = 0x30;
+		mux = 0x00;
+		break;
+	default:
+		return -EINVAL;
+	}
+	ret = ov5640_write_reg(0x4300, format);
+	if (ret < 0)
+		return ret;
+	return ov5640_write_reg(0x501f, mux);
+}
+
 static s32 ov5640_read_reg(u16 reg, u8 *val)
 {
 	u8 au8RegBuf[2] = {0};
@@ -783,6 +812,61 @@ static s32 ov5640_read_reg(u16 reg, u8 *val)
 	*val = u8RdVal;
 
 	return u8RdVal;
+}
+
+static int ov5640_set_vflip(bool enable)
+{
+	u8 value;
+	int ret;
+
+	ret = ov5640_read_reg(OV5640_REG_TIMING_TC_REG20, &value);
+	if (ret < 0)
+		return ret;
+
+	/* Set ISP and sensor vertical flip together; preserve binning bits. */
+	value &= ~OV5640_VFLIP_MASK;
+	if (enable)
+		value |= OV5640_VFLIP_MASK;
+
+	return ov5640_write_reg(OV5640_REG_TIMING_TC_REG20, value);
+}
+
+static int ov5640_queryctrl(struct v4l2_subdev *sd,
+			  struct v4l2_queryctrl *qc)
+{
+	if (qc->id != V4L2_CID_VFLIP)
+		return -EINVAL;
+
+	return v4l2_ctrl_query_fill(qc, 0, 1, 1, 0);
+}
+
+static int ov5640_g_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
+{
+	struct ov5640 *sensor = to_ov5640(v4l2_get_subdevdata(sd));
+
+	if (ctrl->id != V4L2_CID_VFLIP)
+		return -EINVAL;
+
+	ctrl->value = sensor->vflip;
+	return 0;
+}
+
+static int ov5640_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl)
+{
+	struct ov5640 *sensor = to_ov5640(v4l2_get_subdevdata(sd));
+	int ret;
+
+	if (ctrl->id != V4L2_CID_VFLIP)
+		return -EINVAL;
+	if (ctrl->value < 0 || ctrl->value > 1)
+		return -ERANGE;
+
+	ret = ov5640_set_vflip(ctrl->value);
+	if (ret < 0)
+		return ret;
+
+	sensor->vflip = ctrl->value;
+	return 0;
 }
 
 #ifdef CONFIG_VIDEO_ADV_DEBUG
@@ -1533,6 +1617,14 @@ static int ov5640_s_parm(struct v4l2_subdev *sd, struct v4l2_streamparm *a)
 		if (ret < 0)
 			goto error;
 
+		/* Mode tables may overwrite output format; restore the negotiated one. */
+		ret = ov5640_set_datafmt(sensor->fmt);
+		if (ret < 0)
+			goto error;
+		/* Mode tables also reset the ISP and sensor vertical flip bits. */
+		ret = ov5640_set_vflip(sensor->vflip);
+		if (ret < 0)
+			goto error;
 		sensor->streamcap.timeperframe = *timeperframe;
 		sensor->streamcap.capturemode = a->parm.capture.capturemode;
 
@@ -1587,12 +1679,18 @@ static int ov5640_s_fmt(struct v4l2_subdev *sd,
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	struct ov5640 *sensor = to_ov5640(client);
 
-	/* MIPI CSI could have changed the format, double-check */
-	if (!ov5640_find_datafmt(mf->code))
-		return -EINVAL;
+	const struct ov5640_datafmt *fmt = ov5640_find_datafmt(mf->code);
+	int ret;
 
+	if (!fmt)
+		return -EINVAL;
 	ov5640_try_fmt(sd, mf);
-	sensor->fmt = ov5640_find_datafmt(mf->code);
+	ret = ov5640_set_datafmt(fmt);
+	if (ret < 0)
+		return ret;
+	sensor->fmt = fmt;
+	sensor->pix.pixelformat = mf->code == MEDIA_BUS_FMT_RGB565_2X8_LE ?
+				 V4L2_PIX_FMT_RGB565 : V4L2_PIX_FMT_YUYV;
 
 	return 0;
 }
@@ -1741,6 +1839,10 @@ static int init_device(void)
 		return -EINVAL; /* Only support 15fps or 30fps now. */
 
 	ret = ov5640_init_mode();
+	if (!ret)
+		ret = ov5640_set_datafmt(ov5640_data.fmt);
+	if (!ret)
+		ret = ov5640_set_vflip(ov5640_data.vflip);
 
 	return ret;
 }
@@ -1762,6 +1864,9 @@ static const struct v4l2_subdev_pad_ops ov5640_subdev_pad_ops = {
 
 static struct v4l2_subdev_core_ops ov5640_subdev_core_ops = {
 	.s_power	= ov5640_s_power,
+	.queryctrl	= ov5640_queryctrl,
+	.g_ctrl		= ov5640_g_ctrl,
+	.s_ctrl		= ov5640_s_ctrl,
 #ifdef CONFIG_VIDEO_ADV_DEBUG
 	.g_register	= ov5640_get_register,
 	.s_register	= ov5640_set_register,

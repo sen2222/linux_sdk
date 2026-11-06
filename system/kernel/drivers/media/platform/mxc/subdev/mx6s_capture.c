@@ -262,6 +262,12 @@ static struct mx6s_fmt formats[] = {
 		.mbus_code	= MEDIA_BUS_FMT_YUYV8_2X8,
 		.bpp		= 2,
 	}, {
+		.name		= "RGB565-16",
+		.fourcc		= V4L2_PIX_FMT_RGB565,
+		.pixelformat	= V4L2_PIX_FMT_RGB565,
+		.mbus_code	= MEDIA_BUS_FMT_RGB565_2X8_LE,
+		.bpp		= 2,
+	}, {
 		.name		= "YUV32 (X-Y-U-V)",
 		.fourcc		= V4L2_PIX_FMT_YUV32,
 		.pixelformat	= V4L2_PIX_FMT_YUV32,
@@ -280,6 +286,7 @@ struct mx6s_buf_internal {
 	struct list_head	queue;
 	int					bufnum;
 	bool				discard;
+	bool				error;
 };
 
 /* buffer for one video frame */
@@ -675,6 +682,7 @@ static void mx6s_videobuf_queue(struct vb2_buffer *vb)
 
 	spin_lock_irqsave(&csi_dev->slock, flags);
 
+	buf->internal.error = false;
 	list_add_tail(&buf->internal.queue, &csi_dev->capture);
 
 	spin_unlock_irqrestore(&csi_dev->slock, flags);
@@ -808,6 +816,7 @@ static int mx6s_configure_csi(struct mx6s_csi_dev *csi_dev)
 		break;
 	case V4L2_PIX_FMT_UYVY:
 	case V4L2_PIX_FMT_YUYV:
+	case V4L2_PIX_FMT_RGB565:
 		if (csi_dev->csi_mux_mipi == true)
 			width = pix->width;
 		else
@@ -985,16 +994,28 @@ static void mx6s_csi_frame_done(struct mx6s_csi_dev *csi_dev,
 	struct mx6s_buffer *buf;
 	struct vb2_buffer *vb;
 	unsigned long phys;
+	struct mx6s_buf_internal *candidate;
 
-	ibuf = list_first_entry(&csi_dev->active_bufs, struct mx6s_buf_internal,
-			       queue);
+	/* 中断可能合并或乱序，必须匹配完成的槽位，不能把仍在写入的队首交给用户。 */
+	ibuf = NULL;
+	list_for_each_entry(candidate, &csi_dev->active_bufs, queue) {
+		if (candidate->bufnum == bufnum) {
+			ibuf = candidate;
+			break;
+		}
+	}
+	if (!ibuf) {
+		dev_warn_ratelimited(csi_dev->dev, "CSI no active buffer for slot %d\n", bufnum);
+		return;
+	}
+	err |= ibuf->error;
 
 	if (ibuf->discard) {
 		/*
 		 * Discard buffer must not be returned to user space.
 		 * Just return it to the discard queue.
 		 */
-		list_move_tail(csi_dev->active_bufs.next, &csi_dev->discard);
+		list_move_tail(&ibuf->queue, &csi_dev->discard);
 	} else {
 		buf = mx6s_ibuf_to_buf(ibuf);
 
@@ -1004,11 +1025,13 @@ static void mx6s_csi_frame_done(struct mx6s_csi_dev *csi_dev,
 			if (csi_read(csi_dev, CSI_CSIDMASA_FB2) != phys) {
 				dev_err(csi_dev->dev, "%lx != %x\n", phys,
 					csi_read(csi_dev, CSI_CSIDMASA_FB2));
+				return;
 			}
 		} else {
 			if (csi_read(csi_dev, CSI_CSIDMASA_FB1) != phys) {
 				dev_err(csi_dev->dev, "%lx != %x\n", phys,
 					csi_read(csi_dev, CSI_CSIDMASA_FB1));
+				return;
 			}
 		}
 		dev_dbg(csi_dev->dev, "%s (vb=0x%p) 0x%p %lu\n", __func__, vb,
@@ -1038,6 +1061,7 @@ static void mx6s_csi_frame_done(struct mx6s_csi_dev *csi_dev,
 		ibuf = list_first_entry(&csi_dev->discard,
 					struct mx6s_buf_internal, queue);
 		ibuf->bufnum = bufnum;
+		ibuf->error = false;
 
 		list_move_tail(csi_dev->discard.next, &csi_dev->active_bufs);
 
@@ -1050,6 +1074,7 @@ static void mx6s_csi_frame_done(struct mx6s_csi_dev *csi_dev,
 			       internal.queue);
 
 	buf->internal.bufnum = bufnum;
+	buf->internal.error = false;
 
 	list_move_tail(csi_dev->capture.next, &csi_dev->active_bufs);
 
@@ -1065,6 +1090,7 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 	struct mx6s_csi_dev *csi_dev =  data;
 	unsigned long status;
 	u32 cr1, cr3, cr18;
+	struct mx6s_buf_internal *ibuf;
 
 	spin_lock(&csi_dev->slock);
 
@@ -1078,6 +1104,13 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 
 		spin_unlock(&csi_dev->slock);
 		return IRQ_HANDLED;
+	}
+
+	/* 重置/双完成中断期间，两槽都可能只写入半帧，之后须以ERROR归还。 */
+	if ((status & (BIT_RFF_OR_INT | BIT_HRESP_ERR_INT | BIT_ADDR_CH_ERR_INT)) ||
+	    ((status & BIT_DMA_TSF_DONE_FB1) && (status & BIT_DMA_TSF_DONE_FB2))) {
+		list_for_each_entry(ibuf, &csi_dev->active_bufs, queue)
+			ibuf->error = true;
 	}
 
 	if (status & BIT_RFF_OR_INT)
@@ -1128,8 +1161,12 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 		cr18 |= BIT_CSI_ENABLE;
 		csi_write(csi_dev, cr18, CSI_CSICR18);
 
-		pr_debug("base address switching Change Err.\n");
+		dev_warn_ratelimited(csi_dev->dev, "CSI base address switching error; dropping affected frames\n");
 	}
+
+	/* 复位前的DONE标志已经失效，不能在重新启动DMA后立即交帧。 */
+	if (status & (BIT_RFF_OR_INT | BIT_HRESP_ERR_INT | BIT_ADDR_CH_ERR_INT))
+		goto irq_unlock;
 
 	if ((status & BIT_DMA_TSF_DONE_FB1) &&
 		(status & BIT_DMA_TSF_DONE_FB2)) {
@@ -1140,13 +1177,14 @@ static irqreturn_t mx6s_csi_irq_handler(int irq, void *data)
 		 * when csi work in field0 and field1 will write to
 		 * new base address.
 		 * PDM TKT230775 */
-		pr_debug("Skip two frames\n");
+		dev_warn_ratelimited(csi_dev->dev, "CSI simultaneous DMA completions; dropping ambiguous frames\n");
 	} else if (status & BIT_DMA_TSF_DONE_FB1) {
 		mx6s_csi_frame_done(csi_dev, 0, false);
 	} else if (status & BIT_DMA_TSF_DONE_FB2) {
 		mx6s_csi_frame_done(csi_dev, 1, false);
 	}
 
+irq_unlock:
 	spin_unlock(&csi_dev->slock);
 
 	return IRQ_HANDLED;
@@ -1479,9 +1517,7 @@ static int mx6s_vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 			(char *)&csi_dev->fmt->name);
 
 	/* Config csi */
-	mx6s_configure_csi(csi_dev);
-
-	return 0;
+	return mx6s_configure_csi(csi_dev);
 }
 
 static int mx6s_vidioc_g_fmt_vid_cap(struct file *file, void *priv,
@@ -1592,6 +1628,30 @@ static int mx6s_vidioc_s_crop(struct file *file, void *priv,
 	return 0;
 }
 
+static int mx6s_vidioc_queryctrl(struct file *file, void *priv,
+			       struct v4l2_queryctrl *qc)
+{
+	struct mx6s_csi_dev *csi_dev = video_drvdata(file);
+
+	return v4l2_subdev_call(csi_dev->sd, core, queryctrl, qc);
+}
+
+static int mx6s_vidioc_g_ctrl(struct file *file, void *priv,
+			    struct v4l2_control *ctrl)
+{
+	struct mx6s_csi_dev *csi_dev = video_drvdata(file);
+
+	return v4l2_subdev_call(csi_dev->sd, core, g_ctrl, ctrl);
+}
+
+static int mx6s_vidioc_s_ctrl(struct file *file, void *priv,
+			    struct v4l2_control *ctrl)
+{
+	struct mx6s_csi_dev *csi_dev = video_drvdata(file);
+
+	return v4l2_subdev_call(csi_dev->sd, core, s_ctrl, ctrl);
+}
+
 static int mx6s_vidioc_g_parm(struct file *file, void *priv,
 			     struct v4l2_streamparm *a)
 {
@@ -1698,6 +1758,9 @@ static const struct v4l2_ioctl_ops mx6s_csi_ioctl_ops = {
 	.vidioc_s_input       = mx6s_vidioc_s_input,
 	.vidioc_streamon      = mx6s_vidioc_streamon,
 	.vidioc_streamoff     = mx6s_vidioc_streamoff,
+	.vidioc_queryctrl     = mx6s_vidioc_queryctrl,
+	.vidioc_g_ctrl        = mx6s_vidioc_g_ctrl,
+	.vidioc_s_ctrl        = mx6s_vidioc_s_ctrl,
 	.vidioc_g_parm        = mx6s_vidioc_g_parm,
 	.vidioc_s_parm        = mx6s_vidioc_s_parm,
 	.vidioc_enum_framesizes = mx6s_vidioc_enum_framesizes,

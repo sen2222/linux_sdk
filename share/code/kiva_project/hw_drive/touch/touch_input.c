@@ -141,7 +141,7 @@ static int touch_input_resync(TOUCH_INPUT_S *touch, int fd)
     return 0;
 }
 
-int lvgl_port_touch_init(TOUCH_INPUT_S *touch, int width, int height)
+int touch_init(TOUCH_INPUT_S *touch, int width, int height)
 {
     struct input_absinfo x, y, slots;
     int fd = open(LVGL_PORT_TOUCH_PATH, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
